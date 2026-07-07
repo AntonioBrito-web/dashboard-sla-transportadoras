@@ -1,0 +1,69 @@
+import bcrypt
+
+from src.db import get_connection
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+
+
+def get_user(username: str) -> dict | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, username, password_hash, role, transportadora FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "username": row[1],
+        "password_hash": row[2],
+        "role": row[3],
+        "transportadora": row[4],
+    }
+
+
+def authenticate(username: str, password: str) -> dict | None:
+    user = get_user(username)
+    if not user or not verify_password(password, user["password_hash"]):
+        return None
+    return user
+
+
+def create_user(username: str, password: str, role: str, transportadora: str | None = None) -> None:
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO users (username, password_hash, role, transportadora) VALUES (?, ?, ?, ?)",
+        (username, hash_password(password), role, transportadora),
+    )
+    conn.commit()
+    conn.close()
+
+
+def existing_transportadoras() -> set[str]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT transportadora FROM users WHERE role = 'transportadora'"
+    ).fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def existing_usernames() -> set[str]:
+    conn = get_connection()
+    rows = conn.execute("SELECT username FROM users").fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def admin_exists() -> bool:
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+    conn.close()
+    return row is not None

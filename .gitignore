@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+data/
+admin_credentials.txt
+credenciais_transportadoras.csv
+.streamlit/secrets.toml
