@@ -4,7 +4,7 @@ import string
 import unicodedata
 from pathlib import Path
 
-from src.auth import admin_exists, create_user, existing_transportadoras, existing_usernames
+from src.auth import admin_exists, create_user, existing_transportadoras, existing_usernames, set_password
 from src.data import load_transportadoras
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +39,20 @@ def ensure_admin() -> None:
         ADMIN_CRED_FILE.write_text(f"usuario: admin\nsenha: {password}\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def reset_admin_password() -> str:
+    nova_senha = gen_password(14)
+    if admin_exists():
+        set_password("admin", nova_senha)
+    else:
+        create_user("admin", nova_senha, "admin")
+    print(f"[seed] Senha do admin redefinida. usuario=admin senha={nova_senha}")
+    try:
+        ADMIN_CRED_FILE.write_text(f"usuario: admin\nsenha: {nova_senha}\n", encoding="utf-8")
+    except OSError:
+        pass
+    return nova_senha
 
 
 def ensure_transportadora_accounts() -> list[dict]:

@@ -67,3 +67,13 @@ def admin_exists() -> bool:
     row = conn.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
     conn.close()
     return row is not None
+
+
+def set_password(username: str, new_password: str) -> None:
+    conn = get_connection()
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE username = ?",
+        (hash_password(new_password), username),
+    )
+    conn.commit()
+    conn.close()

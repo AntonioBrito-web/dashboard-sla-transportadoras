@@ -39,6 +39,18 @@ def preparar_banco() -> None:
     # a conta admin e uma conta por transportadora automaticamente.
     init_db()
     seed_all()
+    # Válvula de escape: defina o secret RESET_ADMIN = "true" no painel do
+    # Streamlit Cloud (Settings -> Secrets) para forçar uma senha nova de
+    # admin — ela aparece nos logs do app logo em seguida. Remova o secret
+    # depois de copiar a senha, senão ela troca de novo a cada reinício.
+    try:
+        forcar_reset = str(st.secrets.get("RESET_ADMIN", "")).strip().lower() == "true"
+    except Exception:
+        forcar_reset = False
+    if forcar_reset:
+        from src.seed import reset_admin_password
+
+        reset_admin_password()
 
 
 preparar_banco()
