@@ -33,7 +33,7 @@ st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
 
 @st.cache_resource(show_spinner="Preparando o banco de dados...")
-def preparar_banco() -> None:
+def preparar_banco() -> str | None:
     # Roda uma única vez por processo (não a cada rerun) — cria as tabelas e,
     # se for a primeira execução neste ambiente (ex.: um deploy novo), semeia
     # a conta admin e uma conta por transportadora automaticamente.
@@ -41,8 +41,9 @@ def preparar_banco() -> None:
     seed_all()
     # Válvula de escape: defina o secret RESET_ADMIN = "true" no painel do
     # Streamlit Cloud (Settings -> Secrets) para forçar uma senha nova de
-    # admin — ela aparece nos logs do app logo em seguida. Remova o secret
-    # depois de copiar a senha, senão ela troca de novo a cada reinício.
+    # admin. A senha nova é exibida na própria tela de login (não só no
+    # log, que é pouco confiável quanto a timing). Remova o secret depois
+    # de copiar a senha, senão ela troca de novo a cada reinício.
     try:
         forcar_reset = str(st.secrets.get("RESET_ADMIN", "")).strip().lower() == "true"
     except Exception:
@@ -50,10 +51,11 @@ def preparar_banco() -> None:
     if forcar_reset:
         from src.seed import reset_admin_password
 
-        reset_admin_password()
+        return reset_admin_password()
+    return None
 
 
-preparar_banco()
+NOVA_SENHA_ADMIN = preparar_banco()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
@@ -161,6 +163,12 @@ def login_screen() -> None:
                 with col_logo:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Dashboard SLA Transportadoras")
+            if NOVA_SENHA_ADMIN:
+                st.warning(
+                    f"Senha de admin redefinida — usuário: `admin`, senha: `{NOVA_SENHA_ADMIN}`. "
+                    "Copie agora e remova o secret RESET_ADMIN em Settings → Secrets.",
+                    icon="🔑",
+                )
             st.subheader("Login")
             with st.form("login_form"):
                 username = st.text_input("Usuário")
