@@ -1,8 +1,9 @@
 import re
+import urllib.parse
 
 import pandas as pd
 
-from src.config import CSV_URL, MESES_PT
+from src.config import CSV_URL, MESES_PT, SHEET_ID
 
 _CJK_PATTERN = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿＀-￯]+")
 
@@ -31,6 +32,18 @@ ABREVIATURA_CANONICA = {
     "J&T EXPRESS BRAZIL LTDA": "JET",
 }
 
+# Aba complementar com o status de saída mais confiável (a aba "Chegada
+# Real" existe na planilha mas está praticamente vazia — não é usada).
+SHEET_SAIDA_REAL = "Saída real 实际发车"
+
+# Categorias de responsabilidade já usadas pela própria planilha na aba
+# Saída real — mesmas 3 categorias usadas no fluxo de aprovação do admin.
+RESPONSABILIDADE_MOTIVO_SAIDA = {
+    "Operações 运营 SC/DC": "Atraso saída - Operações",
+    "Transp 运输公司": "Atraso saída - Transportadora",
+    "Incontrolável 不可控因素": "Atraso saída - Incontrolável",
+}
+
 COL_DATA = "Data"
 COL_ID_VIAGEM = "ID Viagem"
 COL_STATUS = "Status"
@@ -53,6 +66,8 @@ COL_PREVISTO_CHEGADA = "Horário previsto de chegada"
 COL_REAL_CHEGADA = "Tempo real de chegada"
 COL_STATUS_CHEGADA = "Status chegada"
 COL_MOTIVO_CHEGADA_DETALHE = "Motivo do atraso chegada (motivo menor)"
+COL_STATUS_TRANSIT = "Status transit time"
+COL_MOTIVO_TRANSIT = "Motivo do atraso transit time (motivo maior)"
 COL_KM = "Quilometragem"
 COL_VALOR_MULTA = "Valor da multa"
 COL_MES = "mês"
@@ -73,6 +88,36 @@ def _abreviatura_col(columns) -> str | None:
         if c.startswith("Abreviatura de transportador"):
             return c
     return None
+
+
+def eh_motivo_saida(motivo) -> bool:
+    if pd.isna(motivo):
+        return False
+    motivo_lower = str(motivo).lower()
+    return "saída" in motivo_lower or "saida" in motivo_lower
+
+
+def fetch_saida_real_dataframe() -> pd.DataFrame:
+    url = (
+        f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet="
+        + urllib.parse.quote(SHEET_SAIDA_REAL)
+    )
+    return pd.read_csv(url, low_memory=False)
+
+
+def _mapa_responsabilidade_saida() -> dict:
+    # Chave só com ID viagem + Seção da estrada (sem a Data): a coluna
+    # "Data" tem um deslocamento de até 1 dia entre as duas abas para a
+    # mesma viagem (a Saída real registra a data de partida, que em
+    # viagens noturnas cai um dia antes da data-referência da Aba
+    # Principal), então incluir a data derrubava a taxa de correspondência
+    # de ~99% para ~30%. ID+Seção sozinhos já são praticamente únicos nas
+    # duas abas (~99,97%).
+    df = fetch_saida_real_dataframe()
+    chave = df["ID viagem"].astype(str) + "|" + df["Seção da estrada"].astype(str)
+    responsabilidade = df["Responsabilidade"].map(RESPONSABILIDADE_MOTIVO_SAIDA)
+    serie = pd.Series(responsabilidade.values, index=chave).dropna()
+    return serie[~serie.index.duplicated(keep="first")].to_dict()
 
 
 def _to_float_br(series: pd.Series) -> pd.Series:
@@ -130,6 +175,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out["motivo_chegada_menor"] = _strip_cjk(df[COL_MOTIVO_CHEGADA_DETALHE]) if COL_MOTIVO_CHEGADA_DETALHE in df.columns else pd.NA
     out.loc[df[COL_MOTIVO_CHEGADA_DETALHE].isna(), "motivo_chegada_menor"] = pd.NA
 
+    status_transit_raw = df.get(COL_STATUS_TRANSIT, pd.Series(dtype=str)).astype(str)
+    out["no_prazo_transit"] = status_transit_raw.str.contains("No prazo", case=False, na=False)
+    out["fora_prazo_transit"] = status_transit_raw.str.contains("Fora do prazo", case=False, na=False)
+    out["motivo_transit"] = _strip_cjk(df[COL_MOTIVO_TRANSIT]) if COL_MOTIVO_TRANSIT in df.columns else pd.NA
+    if COL_MOTIVO_TRANSIT in df.columns:
+        out.loc[df[COL_MOTIVO_TRANSIT].isna(), "motivo_transit"] = pd.NA
+
     out["km"] = _to_float_br(df[COL_KM]) if COL_KM in df.columns else pd.NA
     out["valor_multa"] = _to_float_br(df[COL_VALOR_MULTA]) if COL_VALOR_MULTA in df.columns else pd.NA
     out["tt_planejado"] = df.get(COL_TT_PLANEJADO)
@@ -153,6 +205,15 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         + "|"
         + out["secao_estrada"].astype(str)
     )
+
+    # Substitui os motivos de atraso de saída (que na Aba Principal vêm só
+    # como texto genérico "Resp. Operação"/"Resp.Transp.") pela
+    # responsabilidade mais precisa da aba Saída real, quando disponível.
+    chave_id_secao = out["id_viagem"].astype(str) + "|" + out["secao_estrada"].astype(str)
+    mapa_resp_saida = _mapa_responsabilidade_saida()
+    out["responsabilidade_saida_real"] = chave_id_secao.map(mapa_resp_saida)
+    mask_saida = out["motivo_atraso_chegada"].apply(eh_motivo_saida) & out["responsabilidade_saida_real"].notna()
+    out.loc[mask_saida, "motivo_atraso_chegada"] = out.loc[mask_saida, "responsabilidade_saida_real"]
 
     return out
 
@@ -267,15 +328,40 @@ COLS_DETALHE_SAIDA = {
     "descricao_ocorrencia_saida": "Descrição detalhada da ocorrência saída",
 }
 
-
-def eh_motivo_saida(motivo: str) -> bool:
-    motivo_lower = (motivo or "").lower()
-    return "saída" in motivo_lower or "saida" in motivo_lower
+COLS_DETALHE_TRANSIT = {
+    "data": "Data",
+    "id_viagem": "ID Viagem",
+    "numero_linha": "Nº linha",
+    "secao_estrada": "Seção da estrada",
+    "placa": "Placa",
+    "modelo_veiculo": "Modelo do veículo",
+    "abreviatura": "Transportadora",
+    "origem": "Origem",
+    "destino": "Destino",
+    "tt_planejado": "TT planejado",
+    "tt_real": "TT real",
+    "motivo_transit": "Motivo do atraso transit time",
+}
 
 
 def detalhe_atraso(df: pd.DataFrame, motivo: str) -> tuple[pd.DataFrame, dict]:
     filtrado = df[df["fora_prazo_chegada"] & (df["motivo_atraso_chegada"] == motivo)].copy()
     colunas = COLS_DETALHE_SAIDA if eh_motivo_saida(motivo) else COLS_DETALHE_CHEGADA
+    campos = list(colunas.keys())
+    detalhe = filtrado[["chave_viagem", "transportadora"] + campos].rename(columns=colunas)
+    return detalhe.sort_values("Data", ascending=False), colunas
+
+
+_CATEGORIAS_DETALHE = {
+    "saida": ("fora_prazo_saida", COLS_DETALHE_SAIDA),
+    "chegada": ("fora_prazo_chegada", COLS_DETALHE_CHEGADA),
+    "transit": ("fora_prazo_transit", COLS_DETALHE_TRANSIT),
+}
+
+
+def detalhe_categoria(df: pd.DataFrame, categoria: str) -> tuple[pd.DataFrame, dict]:
+    coluna_flag, colunas = _CATEGORIAS_DETALHE[categoria]
+    filtrado = df[df[coluna_flag]].copy()
     campos = list(colunas.keys())
     detalhe = filtrado[["chave_viagem", "transportadora"] + campos].rename(columns=colunas)
     return detalhe.sort_values("Data", ascending=False), colunas

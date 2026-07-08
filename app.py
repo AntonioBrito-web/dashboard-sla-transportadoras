@@ -10,13 +10,25 @@ from src.data import (
     clean_dataframe,
     compute_kpis,
     detalhe_atraso,
+    detalhe_categoria,
     fetch_raw_dataframe,
     monthly_sla,
     motivos_atraso_chegada,
     ranking_transportadoras,
     regional_dist,
 )
-from src.db import get_justificativas, get_meta, init_db, salvar_justificativa_anexo, salvar_justificativa_texto, set_meta
+from src.db import (
+    CATEGORIAS_APROVACAO,
+    aprovar_justificativa,
+    chaves_reprovadas,
+    get_justificativas,
+    get_meta,
+    init_db,
+    reprovar_justificativa,
+    salvar_justificativa_anexo,
+    salvar_justificativa_texto,
+    set_meta,
+)
 from src.seed import seed_all
 from src.theme import BRAND_RED, chart_colors
 
@@ -368,30 +380,52 @@ def render_ranking(df: pd.DataFrame) -> None:
     )
 
 
-def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
-    detalhe, colunas = detalhe_atraso(df, motivo)
-    st.markdown(f"#### Detalhe — {motivo}")
+STATUS_APROVACAO_LABEL = {"pendente": "Pendente", "aprovado": "Aprovado", "reprovado": "Reprovado"}
+
+
+def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str) -> None:
+    st.markdown(f"#### {titulo}")
     if detalhe.empty:
-        st.info("Sem viagens para este motivo no período filtrado.")
+        st.info("Sem viagens nesta categoria no período filtrado.")
         return
 
     chaves = detalhe["chave_viagem"].tolist()
     justificativas = get_justificativas(chaves)
+    detalhe = detalhe.copy()
     detalhe["Justificativa"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
     )
     detalhe["Anexo"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("anexo_nome", "") or "—"
     )
+    detalhe["_status"] = detalhe["chave_viagem"].map(
+        lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
+    )
+
+    pode_editar = user["role"] == "transportadora"
+    eh_admin = user["role"] == "admin"
 
     colunas_exibir = list(colunas.values()) + ["Justificativa", "Anexo"]
-    pode_editar = user["role"] == "transportadora"
-    desabilitadas = colunas_exibir if not pode_editar else [c for c in colunas_exibir if c != "Justificativa"]
+    if eh_admin:
+        detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
+        colunas_exibir = colunas_exibir + ["Decisão"]
+
+    if pode_editar:
+        desabilitadas = [c for c in colunas_exibir if c != "Justificativa"]
+    elif eh_admin:
+        # só a Decisão é editável, e só quando existe justificativa pra avaliar
+        desabilitadas = [c for c in colunas_exibir if c != "Decisão"]
+    else:
+        desabilitadas = colunas_exibir
 
     config_colunas = {"Data": st.column_config.DateColumn(format="DD/MM/YYYY")}
     for col_datahora in ("Previsto chegada", "Real chegada", "Planejado saída", "Real saída"):
         if col_datahora in colunas_exibir:
             config_colunas[col_datahora] = st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
+    if eh_admin:
+        config_colunas["Decisão"] = st.column_config.SelectboxColumn(
+            options=["Pendente", "Aprovado", "Reprovado"]
+        )
 
     editado = st.data_editor(
         detalhe[colunas_exibir],
@@ -399,7 +433,7 @@ def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
         hide_index=True,
         disabled=desabilitadas,
         column_config=config_colunas,
-        key=f"detalhe_editor_{motivo}",
+        key=f"detalhe_editor_{key_sufixo}",
     )
 
     if pode_editar:
@@ -422,10 +456,10 @@ def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
                 "Viagem",
                 options=opcoes,
                 format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
-                key=f"anexo_sel_{motivo}",
+                key=f"anexo_sel_{key_sufixo}",
             )
-            arquivo = st.file_uploader("Arquivo", key=f"anexo_upload_{motivo}")
-            if st.button("Salvar anexo", key=f"anexo_botao_{motivo}") and arquivo is not None:
+            arquivo = st.file_uploader("Arquivo", key=f"anexo_upload_{key_sufixo}")
+            if st.button("Salvar anexo", key=f"anexo_botao_{key_sufixo}") and arquivo is not None:
                 chave = detalhe.loc[escolha, "chave_viagem"]
                 nome_seguro = f"{chave.replace('|', '_').replace('/', '-')}_{arquivo.name}"
                 caminho = ANEXOS_DIR / nome_seguro
@@ -435,6 +469,69 @@ def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
                 )
                 st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
                 st.rerun()
+
+    if eh_admin:
+        for idx in detalhe.index:
+            chave = detalhe.loc[idx, "chave_viagem"]
+            chave_id = chave.replace("|", "_").replace("/", "-")
+            justificativa_atual = detalhe.loc[idx, "Justificativa"]
+            decisao_antiga = detalhe.loc[idx, "Decisão"]
+            decisao_nova = editado.loc[idx, "Decisão"]
+            if not justificativa_atual or decisao_nova == decisao_antiga:
+                continue
+            if decisao_nova == "Reprovado":
+                reprovar_justificativa(chave, user["username"])
+                st.warning(f"Justificativa de {detalhe.loc[idx, 'ID Viagem']} reprovada.", icon="🚫")
+                st.rerun()
+            elif decisao_nova == "Aprovado":
+                st.session_state[f"aprovando_{chave_id}"] = True
+            elif decisao_nova == "Pendente":
+                st.session_state.pop(f"aprovando_{chave_id}", None)
+
+        pendentes_categoria = [
+            idx for idx in detalhe.index
+            if st.session_state.get(f"aprovando_{detalhe.loc[idx, 'chave_viagem'].replace('|', '_').replace('/', '-')}")
+        ]
+        for idx in pendentes_categoria:
+            chave = detalhe.loc[idx, "chave_viagem"]
+            chave_id = chave.replace("|", "_").replace("/", "-")
+            with st.form(f"form_aprova_{key_sufixo}_{chave_id}"):
+                st.write(f"Aprovar justificativa — {detalhe.loc[idx, 'ID Viagem']}")
+                categoria = st.selectbox(
+                    "Categoria de responsabilidade", CATEGORIAS_APROVACAO, key=f"cat_{key_sufixo}_{chave_id}"
+                )
+                confirmar = st.form_submit_button("Confirmar aprovação")
+            if confirmar:
+                aprovar_justificativa(chave, categoria, user["username"])
+                st.session_state.pop(f"aprovando_{chave_id}", None)
+                st.success("Justificativa aprovada.", icon="✅")
+                st.rerun()
+
+
+def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
+    detalhe, colunas = detalhe_atraso(df, motivo)
+    render_tabela_detalhe(detalhe, colunas, user, f"Detalhe — {motivo}", motivo)
+
+
+def render_notificacao_reprovacao(user: dict) -> None:
+    chaves = chaves_reprovadas(user["transportadora"])
+    if chaves:
+        st.error(
+            f"⚠️ {len(chaves)} justificativa(s) sua(s) foram reprovadas pelo admin. "
+            "Refaça a justificativa e/ou o anexo nas tabelas abaixo para que a notificação suma.",
+            icon="🚫",
+        )
+
+
+def render_tabelas_transportadora(df: pd.DataFrame, user: dict) -> None:
+    detalhe_saida, colunas_saida = detalhe_categoria(df, "saida")
+    render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
+
+    detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
+    render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
+
+    detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
+    render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
 
 
 def render_table(df: pd.DataFrame) -> None:
@@ -480,7 +577,9 @@ def dashboard_screen(user: dict) -> None:
         selecionada = st.sidebar.selectbox("Transportadora", opcoes)
         if selecionada != "Todas":
             df = df[df["transportadora"] == selecionada]
-        titulo = selecionada
+            titulo = selecionada
+        else:
+            titulo = "Geral das Transportadoras Parceiras"
     else:
         df = df[df["transportadora"] == user["transportadora"]]
         titulo = user["transportadora"] or "Transportadora"
@@ -503,6 +602,9 @@ def dashboard_screen(user: dict) -> None:
 
     render_hero(titulo, df)
 
+    if user["role"] == "transportadora":
+        render_notificacao_reprovacao(user)
+
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
@@ -510,10 +612,10 @@ def dashboard_screen(user: dict) -> None:
         render_monthly_chart(df, colors)
     motivo_selecionado = None
     with col2:
-        st.subheader("Principais motivos de atraso (chegada)")
+        st.subheader("Principais motivos de atraso")
         motivo_selecionado = render_motivos_chart(df, colors)
 
-    if motivo_selecionado:
+    if motivo_selecionado and user["role"] == "admin":
         render_detalhe_atraso(df, motivo_selecionado, user)
 
     st.divider()
@@ -525,6 +627,10 @@ def dashboard_screen(user: dict) -> None:
         with col4:
             st.subheader("Ranking de transportadoras")
             render_ranking(df)
+        st.divider()
+
+    if user["role"] == "transportadora":
+        render_tabelas_transportadora(df, user)
         st.divider()
 
     st.subheader("Viagens")
