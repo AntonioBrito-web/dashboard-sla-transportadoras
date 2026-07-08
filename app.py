@@ -9,9 +9,7 @@ from src.config import CACHE_TTL_SECONDS
 from src.data import (
     clean_dataframe,
     compute_kpis,
-    detalhe_atraso,
     detalhe_categoria,
-    eh_motivo_saida,
     fetch_raw_dataframe,
     monthly_sla,
     motivos_atraso_chegada,
@@ -324,12 +322,11 @@ def render_monthly_chart(df: pd.DataFrame, colors: dict) -> None:
     st.altair_chart(chart, width="stretch", theme=None)
 
 
-def render_motivos_chart(df: pd.DataFrame, colors: dict) -> str | None:
+def render_motivos_chart(df: pd.DataFrame, colors: dict) -> None:
     motivos = motivos_atraso_chegada(df)
     if motivos.empty:
         st.info("Sem atrasos de chegada registrados no período filtrado.")
-        return None
-    sel = alt.selection_point(fields=["motivo"], name="motivo_sel", empty=False)
+        return
     base = alt.Chart(motivos).transform_calculate(
         ocorrencias_fmt="replace(format(datum.ocorrencias, ',.0f'), /,/g, '.')"
     )
@@ -341,7 +338,6 @@ def render_motivos_chart(df: pd.DataFrame, colors: dict) -> str | None:
         y=alt.Y("motivo:N", sort="-x", title="", axis=alt.Axis(domainColor=colors["gridline"], labelColor=colors["ink_secondary"])),
         tooltip=["motivo", "ocorrencias"],
         color=alt.value(BRAND_RED),
-        opacity=alt.condition(sel, alt.value(1.0), alt.value(0.5)),
     )
     labels = base.mark_text(align="left", dx=4, fontWeight="bold").encode(
         x="ocorrencias:Q", y=alt.Y("motivo:N", sort="-x"), text="ocorrencias_fmt:N",
@@ -349,17 +345,10 @@ def render_motivos_chart(df: pd.DataFrame, colors: dict) -> str | None:
     )
     chart = (
         alt.layer(bars, labels)
-        .add_params(sel)
         .properties(height=320, background="transparent")
         .configure_view(strokeWidth=0)
     )
-    event = st.altair_chart(chart, width="stretch", theme=None, on_select="rerun", key="motivos_chart")
-    st.caption("Clique numa barra para ver o detalhe das viagens e registrar justificativa.")
-
-    selecionados = []
-    if event and event.selection:
-        selecionados = event.selection.get("motivo_sel") or []
-    return selecionados[0].get("motivo") if selecionados else None
+    st.altair_chart(chart, width="stretch", theme=None)
 
 
 def render_regional_chart(df: pd.DataFrame, colors: dict) -> None:
@@ -596,12 +585,6 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
                 st.rerun()
 
 
-def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
-    detalhe, colunas = detalhe_atraso(df, motivo)
-    titulo = "Detalhe Atraso Saída" if eh_motivo_saida(motivo) else f"Detalhe — {motivo}"
-    render_tabela_detalhe(detalhe, colunas, user, titulo, motivo)
-
-
 def render_notificacao_reprovacao(user: dict) -> None:
     chaves = chaves_reprovadas(user["transportadora"])
     if chaves:
@@ -735,13 +718,9 @@ def dashboard_screen(user: dict) -> None:
     with col1:
         st.subheader("Evolução mensal do SLA")
         render_monthly_chart(df, colors)
-    motivo_selecionado = None
     with col2:
         st.subheader("Principais motivos de atraso")
-        motivo_selecionado = render_motivos_chart(df, colors)
-
-    if motivo_selecionado and user["role"] == "admin":
-        render_detalhe_atraso(df, motivo_selecionado, user)
+        render_motivos_chart(df, colors)
 
     st.divider()
     if user["role"] == "admin":
@@ -754,12 +733,12 @@ def dashboard_screen(user: dict) -> None:
             render_ranking(df)
         st.divider()
 
-    if user["role"] in ("transportadora", "admin"):
-        render_tabelas_fixas(df, user)
-        st.divider()
-
     st.subheader("Viagens")
     render_table(df)
+
+    if user["role"] in ("transportadora", "admin"):
+        st.divider()
+        render_tabelas_fixas(df, user)
 
 
 def main() -> None:
