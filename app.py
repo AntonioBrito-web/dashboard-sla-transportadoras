@@ -612,7 +612,12 @@ def render_notificacao_reprovacao(user: dict) -> None:
         )
 
 
-def render_tabelas_transportadora(df: pd.DataFrame, user: dict) -> None:
+def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
+    # Usado tanto pra transportadora quanto pro admin: garante acesso direto
+    # às 3 dimensões de atraso (saída/chegada/transit), sem depender de
+    # navegar bar a bar no gráfico — o que pode "esconder" justificativas
+    # quando a Aba Principal e a aba Saída real divergem sobre uma viagem
+    # específica (uma diz que atrasou, a outra diz que não).
     detalhe_saida, colunas_saida = detalhe_categoria(df, "saida")
     render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
 
@@ -749,8 +754,8 @@ def dashboard_screen(user: dict) -> None:
             render_ranking(df)
         st.divider()
 
-    if user["role"] == "transportadora":
-        render_tabelas_transportadora(df, user)
+    if user["role"] in ("transportadora", "admin"):
+        render_tabelas_fixas(df, user)
         st.divider()
 
     st.subheader("Viagens")
