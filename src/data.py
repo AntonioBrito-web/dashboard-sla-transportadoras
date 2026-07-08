@@ -359,11 +359,17 @@ COLS_DETALHE_TRANSIT = {
 
 
 def detalhe_atraso(df: pd.DataFrame, motivo: str) -> tuple[pd.DataFrame, dict]:
+    if eh_motivo_saida(motivo):
+        # Mesma fonte/tabela usada na visão da transportadora (aba Saída
+        # real) — não filtra mais pela categoria específica do motivo
+        # clicado, mostra o mesmo "Detalhe Atraso Saída" de lá, só que já
+        # restrito ao recorte atual (transportadora/mês/quinzena) do df.
+        return detalhe_saida_real(df)
     filtrado = df[df["fora_prazo_chegada"] & (df["motivo_atraso_chegada"] == motivo)].copy()
-    colunas = COLS_DETALHE_SAIDA if eh_motivo_saida(motivo) else COLS_DETALHE_CHEGADA
-    campos = list(colunas.keys())
-    detalhe = filtrado[["chave_viagem", "transportadora"] + campos].rename(columns=colunas)
-    return detalhe.sort_values("Data", ascending=False), colunas
+    detalhe = filtrado[["chave_viagem", "transportadora"] + list(COLS_DETALHE_CHEGADA.keys())].rename(
+        columns=COLS_DETALHE_CHEGADA
+    )
+    return detalhe.sort_values("Data", ascending=False), COLS_DETALHE_CHEGADA
 
 
 _CATEGORIAS_DETALHE = {

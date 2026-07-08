@@ -11,6 +11,7 @@ from src.data import (
     compute_kpis,
     detalhe_atraso,
     detalhe_categoria,
+    eh_motivo_saida,
     fetch_raw_dataframe,
     monthly_sla,
     motivos_atraso_chegada,
@@ -428,6 +429,9 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
     detalhe["Anexo"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("anexo_nome", "") or "—"
     )
+    detalhe["_anexo_caminho"] = detalhe["chave_viagem"].map(
+        lambda k: justificativas.get(k, {}).get("anexo_caminho", "")
+    )
     detalhe["_status"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
     )
@@ -529,6 +533,28 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
                         st.rerun()
 
     if eh_admin:
+        com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_anexo_caminho"]]
+        with st.expander(f"Ver anexos ({len(com_anexo)})"):
+            if not com_anexo:
+                st.caption("Nenhum anexo nesta tabela.")
+            else:
+                escolha_anexo = st.selectbox(
+                    "Viagem",
+                    options=com_anexo,
+                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {detalhe.loc[i, 'Anexo']}",
+                    key=f"ver_anexo_sel_{key_sufixo}",
+                )
+                caminho_anexo = Path(detalhe.loc[escolha_anexo, "_anexo_caminho"])
+                if caminho_anexo.exists():
+                    st.download_button(
+                        f"Abrir {detalhe.loc[escolha_anexo, 'Anexo']}",
+                        data=caminho_anexo.read_bytes(),
+                        file_name=detalhe.loc[escolha_anexo, "Anexo"],
+                        key=f"ver_anexo_botao_{key_sufixo}",
+                    )
+                else:
+                    st.error("Arquivo não encontrado no servidor (pode ter sido perdido num reinício do app).")
+
         for idx in detalhe.index:
             chave = detalhe.loc[idx, "chave_viagem"]
             chave_id = chave.replace("|", "_").replace("/", "-")
@@ -568,7 +594,8 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
 
 def render_detalhe_atraso(df: pd.DataFrame, motivo: str, user: dict) -> None:
     detalhe, colunas = detalhe_atraso(df, motivo)
-    render_tabela_detalhe(detalhe, colunas, user, f"Detalhe — {motivo}", motivo)
+    titulo = "Detalhe Atraso Saída" if eh_motivo_saida(motivo) else f"Detalhe — {motivo}"
+    render_tabela_detalhe(detalhe, colunas, user, titulo, motivo)
 
 
 def render_notificacao_reprovacao(user: dict) -> None:
