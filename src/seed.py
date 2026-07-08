@@ -55,6 +55,13 @@ def reset_admin_password() -> str:
     return nova_senha
 
 
+def reset_transportadora_password(username: str) -> str:
+    nova_senha = gen_password(10)
+    set_password(username, nova_senha)
+    print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}")
+    return nova_senha
+
+
 def ensure_transportadora_accounts() -> list[dict]:
     ja_cadastradas = existing_transportadoras()
     usernames = existing_usernames()

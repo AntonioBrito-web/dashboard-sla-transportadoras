@@ -69,6 +69,15 @@ def admin_exists() -> bool:
     return row is not None
 
 
+def list_transportadora_users() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT username, transportadora FROM users WHERE role = 'transportadora' ORDER BY transportadora"
+    ).fetchall()
+    conn.close()
+    return [{"username": r[0], "transportadora": r[1]} for r in rows]
+
+
 def set_password(username: str, new_password: str) -> None:
     conn = get_connection()
     conn.execute(

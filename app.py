@@ -4,7 +4,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src.auth import admin_exists, authenticate
+from src.auth import admin_exists, authenticate, list_transportadora_users
 from src.config import CACHE_TTL_SECONDS
 from src.data import (
     clean_dataframe,
@@ -29,7 +29,7 @@ from src.db import (
     salvar_justificativa_texto,
     set_meta,
 )
-from src.seed import seed_all
+from src.seed import reset_transportadora_password, seed_all
 from src.theme import BRAND_RED, chart_colors
 
 
@@ -44,12 +44,13 @@ def formatar_data_br(valor) -> str:
 st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
 
-@st.cache_resource(show_spinner="Preparando o banco de dados...")
-def preparar_banco() -> None:
-    # Roda uma única vez por processo (não a cada rerun) — cria as tabelas e,
-    # se for a primeira execução neste ambiente (ex.: um deploy novo), semeia
-    # a conta admin e uma conta por transportadora automaticamente.
-    init_db()
+@st.cache_resource(show_spinner="Carregando transportadoras...")
+def preparar_seed() -> None:
+    # Só a semeadura fica em cache (rede + Google Sheets, é cara). O
+    # init_db() NÃO pode ficar aqui dentro: se ele só rodasse uma vez por
+    # processo, uma migração de esquema nova (ex.: colunas de aprovação)
+    # nunca chegaria a rodar num processo que já estava de pé antes do
+    # deploy — foi exatamente isso que quebrou a tabela de justificativas.
     seed_all()
 
 
@@ -84,7 +85,8 @@ def verificar_reset_admin() -> str | None:
     return None
 
 
-preparar_banco()
+init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
+preparar_seed()
 NOVA_SENHA_ADMIN = verificar_reset_admin()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -564,11 +566,29 @@ def render_table(df: pd.DataFrame) -> None:
     )
 
 
+def render_gerenciar_senhas() -> None:
+    with st.sidebar.expander("Gerenciar senhas de transportadoras"):
+        usuarios = list_transportadora_users()
+        if not usuarios:
+            st.caption("Nenhuma conta de transportadora encontrada.")
+            return
+        opcoes = {f"{u['transportadora']} ({u['username']})": u["username"] for u in usuarios}
+        escolha_label = st.selectbox("Transportadora", list(opcoes.keys()), key="reset_senha_transp_sel")
+        if st.button("Gerar nova senha", key="reset_senha_transp_botao"):
+            username = opcoes[escolha_label]
+            nova_senha = reset_transportadora_password(username)
+            st.success(f"Nova senha para `{username}`: `{nova_senha}`")
+            st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+
+
 def dashboard_screen(user: dict) -> None:
     df = load_data()
 
     st.sidebar.title("Dashboard SLA")
     st.sidebar.caption(f"Usuário: {user['username']} ({user['role']})")
+
+    if user["role"] == "admin":
+        render_gerenciar_senhas()
 
     colors = chart_colors(get_theme_mode())
 
