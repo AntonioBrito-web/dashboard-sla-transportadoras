@@ -16,7 +16,7 @@ from src.data import (
     ranking_transportadoras,
     regional_dist,
 )
-from src.db import get_justificativas, init_db, salvar_justificativa_anexo, salvar_justificativa_texto
+from src.db import get_justificativas, get_meta, init_db, salvar_justificativa_anexo, salvar_justificativa_texto, set_meta
 from src.seed import seed_all
 from src.theme import BRAND_RED, chart_colors
 
@@ -33,29 +33,47 @@ st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
 
 @st.cache_resource(show_spinner="Preparando o banco de dados...")
-def preparar_banco() -> str | None:
+def preparar_banco() -> None:
     # Roda uma única vez por processo (não a cada rerun) — cria as tabelas e,
     # se for a primeira execução neste ambiente (ex.: um deploy novo), semeia
     # a conta admin e uma conta por transportadora automaticamente.
     init_db()
     seed_all()
+
+
+def verificar_reset_admin() -> str | None:
+    # Roda em TODO rerun (é barato: só leitura de secret + banco) — não
+    # depende do processo reiniciar, ao contrário do preparar_banco() acima.
+    # O estado "já apliquei esse reset" fica gravado no banco (app_meta),
+    # não em cache em memória, então funciona não importa quando o
+    # Streamlit Cloud decidir reiniciar o processo.
+    #
     # Válvula de escape: defina o secret RESET_ADMIN = "true" no painel do
     # Streamlit Cloud (Settings -> Secrets) para forçar uma senha nova de
-    # admin. A senha nova é exibida na própria tela de login (não só no
-    # log, que é pouco confiável quanto a timing). Remova o secret depois
-    # de copiar a senha, senão ela troca de novo a cada reinício.
+    # admin. A senha nova é exibida na própria tela de login. Remova o
+    # secret depois de copiar a senha, senão ela troca de novo.
     try:
-        forcar_reset = str(st.secrets.get("RESET_ADMIN", "")).strip().lower() == "true"
+        secret_ativo = str(st.secrets.get("RESET_ADMIN", "")).strip().lower() == "true"
     except Exception:
-        forcar_reset = False
-    if forcar_reset:
+        secret_ativo = False
+
+    ja_aplicado = get_meta("reset_admin_aplicado") == "true"
+
+    if secret_ativo and not ja_aplicado:
         from src.seed import reset_admin_password
 
-        return reset_admin_password()
+        nova_senha = reset_admin_password()
+        set_meta("reset_admin_aplicado", "true")
+        return nova_senha
+
+    if not secret_ativo and ja_aplicado:
+        set_meta("reset_admin_aplicado", "false")
+
     return None
 
 
-NOVA_SENHA_ADMIN = preparar_banco()
+preparar_banco()
+NOVA_SENHA_ADMIN = verificar_reset_admin()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
@@ -175,6 +193,7 @@ def login_screen() -> None:
                     st.write("Erro ao ler RESET_ADMIN:", str(e))
                 st.write("NOVA_SENHA_ADMIN calculada:", repr(NOVA_SENHA_ADMIN))
                 st.write("admin existe no banco:", admin_exists())
+                st.write("reset_admin_aplicado (banco):", repr(get_meta("reset_admin_aplicado")))
             if NOVA_SENHA_ADMIN:
                 st.warning(
                     f"Senha de admin redefinida — usuário: `admin`, senha: `{NOVA_SENHA_ADMIN}`. "

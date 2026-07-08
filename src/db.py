@@ -36,6 +36,32 @@ def init_db() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_meta (
+            chave TEXT PRIMARY KEY,
+            valor TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_meta(chave: str) -> str | None:
+    conn = get_connection()
+    row = conn.execute("SELECT valor FROM app_meta WHERE chave = ?", (chave,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def set_meta(chave: str, valor: str) -> None:
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO app_meta (chave, valor) VALUES (?, ?) "
+        "ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",
+        (chave, valor),
+    )
     conn.commit()
     conn.close()
 
