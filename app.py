@@ -59,35 +59,37 @@ def preparar_seed() -> str | None:
 
 def verificar_reset_admin() -> str | None:
     # Roda em TODO rerun (é barato: só leitura de secret + banco) — não
-    # depende do processo reiniciar, ao contrário do preparar_banco() acima.
-    # O estado "já apliquei esse reset" fica gravado no banco (app_meta),
-    # não em cache em memória, então funciona não importa quando o
-    # Streamlit Cloud decidir reiniciar o processo.
+    # depende do processo reiniciar. Funciona por VALOR, não por
+    # true/false: guardamos o último texto do secret que já geramos senha
+    # para ele, e disparamos de novo sempre que o texto atual for diferente
+    # do último aplicado. Assim, pedir uma segunda senha nova é só trocar o
+    # texto do secret (ex.: "true" -> "true2") — não precisa zerar antes.
     #
-    # Válvula de escape: defina o secret RESET_ADMIN = "true" no painel do
-    # Streamlit Cloud (Settings -> Secrets) para forçar uma senha nova de
-    # admin. A senha nova é exibida na própria tela de login. Remova o
-    # secret depois de copiar a senha, senão ela troca de novo.
+    # Válvula de escape: defina o secret RESET_ADMIN no painel do Streamlit
+    # Cloud (Settings -> Secrets) com qualquer texto não vazio (ex. "true")
+    # para forçar uma senha nova de admin — ela aparece na própria tela de
+    # login. Quer outra senha depois? Só mudar o texto pra outro valor
+    # (ex. "true2") e salvar de novo.
     try:
-        secret_ativo = str(st.secrets.get("RESET_ADMIN", "")).strip().lower() == "true"
+        valor_secret = str(st.secrets.get("RESET_ADMIN", "")).strip()
     except Exception:
-        secret_ativo = False
+        valor_secret = ""
 
-    ja_aplicado = get_meta("reset_admin_aplicado") == "true"
+    ultimo_valor_aplicado = get_meta("reset_admin_valor") or ""
 
-    if secret_ativo and not ja_aplicado:
+    if valor_secret and valor_secret.lower() != "false" and valor_secret != ultimo_valor_aplicado:
         try:
             from src.seed import reset_admin_password
 
             nova_senha = reset_admin_password()
-            set_meta("reset_admin_aplicado", "true")
+            set_meta("reset_admin_valor", valor_secret)
             return nova_senha
         except Exception as e:
             print(f"[seed] Falha ao redefinir senha do admin: {e}")
             return None
 
-    if not secret_ativo and ja_aplicado:
-        set_meta("reset_admin_aplicado", "false")
+    if not valor_secret and ultimo_valor_aplicado:
+        set_meta("reset_admin_valor", "")
 
     return None
 
@@ -233,7 +235,7 @@ def login_screen() -> None:
                     st.write("Erro ao ler RESET_ADMIN:", str(e))
                 st.write("NOVA_SENHA_ADMIN calculada:", repr(NOVA_SENHA_ADMIN))
                 st.write("admin existe no banco:", admin_exists())
-                st.write("reset_admin_aplicado (banco):", repr(get_meta("reset_admin_aplicado")))
+                st.write("reset_admin_valor (banco):", repr(get_meta("reset_admin_valor")))
             if NOVA_SENHA_ADMIN:
                 st.warning(
                     f"Senha de admin redefinida — usuário: `admin`, senha: `{NOVA_SENHA_ADMIN}`. "
