@@ -403,8 +403,11 @@ def render_ranking(df: pd.DataFrame) -> None:
 STATUS_APROVACAO_LABEL = {"pendente": "Pendente", "aprovado": "Aprovado", "reprovado": "Reprovado"}
 
 
-def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str) -> None:
-    st.markdown(f"#### {titulo}")
+def render_tabela_detalhe(
+    detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str, mostrar_titulo: bool = True
+) -> None:
+    if mostrar_titulo:
+        st.markdown(f"#### {titulo}")
     if detalhe.empty:
         st.info("Sem viagens nesta categoria no período filtrado.")
         return
@@ -602,13 +605,25 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     # quando a Aba Principal e a aba Saída real divergem sobre uma viagem
     # específica (uma diz que atrasou, a outra diz que não).
     detalhe_saida, colunas_saida = detalhe_categoria(df, "saida")
-    render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
-
     detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
-    render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
-
     detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
-    render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
+
+    if user["role"] == "admin":
+        # No admin, as 3 viram abas clicáveis em vez de empilhadas — menos
+        # rolagem pra achar a que interessa.
+        aba_saida, aba_chegada, aba_transit = st.tabs(
+            ["Detalhe Atraso Saída", "Detalhe Atraso Chegada", "Detalhe Atraso Transit time"]
+        )
+        with aba_saida:
+            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida", mostrar_titulo=False)
+        with aba_chegada:
+            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada", mostrar_titulo=False)
+        with aba_transit:
+            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit", mostrar_titulo=False)
+    else:
+        render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
+        render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
+        render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
 
 
 def render_table(df: pd.DataFrame) -> None:
