@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import (
-    admin_exists,
     authenticate,
     list_internal_users,
     list_transportadora_users,
@@ -120,9 +119,9 @@ def aplicar_padronizacao_usernames() -> None:
 
 
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
-SENHA_ADMIN_RECEM_CRIADA = preparar_seed()
+preparar_seed()
 aplicar_padronizacao_usernames()
-NOVA_SENHA_ADMIN = verificar_reset_admin() or SENHA_ADMIN_RECEM_CRIADA
+verificar_reset_admin()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
@@ -230,25 +229,6 @@ def login_screen() -> None:
                 with col_logo:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Dashboard SLA Transportadoras")
-            with st.expander("Diagnóstico (temporário)"):
-                try:
-                    chaves = list(st.secrets.keys())
-                except Exception as e:
-                    chaves = f"erro ao ler secrets: {e}"
-                st.write("Chaves em st.secrets:", chaves)
-                try:
-                    st.write("Valor de RESET_ADMIN:", repr(st.secrets.get("RESET_ADMIN", "AUSENTE")))
-                except Exception as e:
-                    st.write("Erro ao ler RESET_ADMIN:", str(e))
-                st.write("NOVA_SENHA_ADMIN calculada:", repr(NOVA_SENHA_ADMIN))
-                st.write("admin existe no banco:", admin_exists())
-                st.write("reset_admin_valor (banco):", repr(get_meta("reset_admin_valor")))
-            if NOVA_SENHA_ADMIN:
-                st.warning(
-                    f"Senha de admin redefinida — usuário: `admin`, senha: `{NOVA_SENHA_ADMIN}`. "
-                    "Copie agora e remova o secret RESET_ADMIN em Settings → Secrets.",
-                    icon="🔑",
-                )
             st.subheader("Login")
             with st.form("login_form"):
                 username = st.text_input("Usuário")
