@@ -4,7 +4,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src.auth import authenticate
+from src.auth import admin_exists, authenticate
 from src.config import CACHE_TTL_SECONDS
 from src.data import (
     clean_dataframe,
@@ -163,6 +163,18 @@ def login_screen() -> None:
                 with col_logo:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Dashboard SLA Transportadoras")
+            with st.expander("Diagnóstico (temporário)"):
+                try:
+                    chaves = list(st.secrets.keys())
+                except Exception as e:
+                    chaves = f"erro ao ler secrets: {e}"
+                st.write("Chaves em st.secrets:", chaves)
+                try:
+                    st.write("Valor de RESET_ADMIN:", repr(st.secrets.get("RESET_ADMIN", "AUSENTE")))
+                except Exception as e:
+                    st.write("Erro ao ler RESET_ADMIN:", str(e))
+                st.write("NOVA_SENHA_ADMIN calculada:", repr(NOVA_SENHA_ADMIN))
+                st.write("admin existe no banco:", admin_exists())
             if NOVA_SENHA_ADMIN:
                 st.warning(
                     f"Senha de admin redefinida — usuário: `admin`, senha: `{NOVA_SENHA_ADMIN}`. "
