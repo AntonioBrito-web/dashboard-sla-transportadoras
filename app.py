@@ -441,7 +441,12 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
         colunas_exibir = colunas_exibir + ["Decisão"]
 
     if pode_editar:
-        desabilitadas = [c for c in colunas_exibir if c != "Justificativa"]
+        # A Justificativa não é mais editável direto na tabela — escrever e
+        # anexar viram formulários dedicados abaixo, cada um restrito às
+        # viagens no estágio certo (sem justificativa / com justificativa
+        # mas sem anexo). Isso é o que garante o bloqueio: uma vez escrita,
+        # só o admin mexe nela de novo (reprovando).
+        desabilitadas = colunas_exibir
     elif eh_admin:
         # só a Decisão é editável, e só quando existe justificativa pra avaliar
         desabilitadas = [c for c in colunas_exibir if c != "Decisão"]
@@ -467,38 +472,61 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
     )
 
     if pode_editar:
-        houve_alteracao = False
-        for idx in detalhe.index:
-            texto_novo = editado.loc[idx, "Justificativa"]
-            texto_antigo = detalhe.loc[idx, "Justificativa"]
-            if texto_novo != texto_antigo:
-                salvar_justificativa_texto(
-                    detalhe.loc[idx, "chave_viagem"], user["transportadora"], texto_novo, user["username"]
+        sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
+        com_justificativa = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
+
+        with st.expander("Escrever justificativa"):
+            if not sem_justificativa:
+                st.info("Todas as viagens desta tabela já têm justificativa.")
+            else:
+                gen_justif = st.session_state.setdefault(f"justif_gen_{key_sufixo}", 0)
+                escolha_j = st.selectbox(
+                    "Viagem",
+                    options=sem_justificativa,
+                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
+                    key=f"justif_sel_{key_sufixo}_{gen_justif}",
                 )
-                houve_alteracao = True
-        if houve_alteracao:
-            st.success("Justificativa salva.", icon="✅")
-            st.rerun()
+                texto = st.text_area("Justificativa", key=f"justif_texto_{key_sufixo}_{gen_justif}")
+                if st.button("Salvar justificativa", key=f"justif_botao_{key_sufixo}_{gen_justif}"):
+                    if not texto.strip():
+                        st.warning("Escreva um texto antes de salvar.", icon="⚠️")
+                    else:
+                        chave = detalhe.loc[escolha_j, "chave_viagem"]
+                        salvar_justificativa_texto(chave, user["transportadora"], texto.strip(), user["username"])
+                        st.session_state[f"justif_gen_{key_sufixo}"] = gen_justif + 1
+                        st.success(f"Justificativa salva para {detalhe.loc[escolha_j, 'ID Viagem']}.", icon="✅")
+                        st.rerun()
 
         with st.expander("Anexar arquivo a uma viagem"):
-            opcoes = detalhe.index.tolist()
-            escolha = st.selectbox(
-                "Viagem",
-                options=opcoes,
-                format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
-                key=f"anexo_sel_{key_sufixo}",
-            )
-            arquivo = st.file_uploader("Arquivo", key=f"anexo_upload_{key_sufixo}")
-            if st.button("Salvar anexo", key=f"anexo_botao_{key_sufixo}") and arquivo is not None:
-                chave = detalhe.loc[escolha, "chave_viagem"]
-                nome_seguro = f"{chave.replace('|', '_').replace('/', '-')}_{arquivo.name}"
-                caminho = ANEXOS_DIR / nome_seguro
-                caminho.write_bytes(arquivo.getbuffer())
-                salvar_justificativa_anexo(
-                    chave, user["transportadora"], arquivo.name, str(caminho), user["username"]
+            if not com_justificativa:
+                st.warning(
+                    "Nenhuma viagem com justificativa preenchida ainda. "
+                    "Escreva a justificativa antes de anexar um arquivo.",
+                    icon="⚠️",
                 )
-                st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
-                st.rerun()
+            else:
+                gen_anexo = st.session_state.setdefault(f"anexo_gen_{key_sufixo}", 0)
+                escolha = st.selectbox(
+                    "Viagem",
+                    options=com_justificativa,
+                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
+                    key=f"anexo_sel_{key_sufixo}_{gen_anexo}",
+                )
+                arquivo = st.file_uploader("Arquivo", key=f"anexo_upload_{key_sufixo}_{gen_anexo}")
+                if st.button("Salvar anexo", key=f"anexo_botao_{key_sufixo}_{gen_anexo}"):
+                    if arquivo is None:
+                        st.warning("Selecione um arquivo antes de salvar.", icon="⚠️")
+                    else:
+                        chave = detalhe.loc[escolha, "chave_viagem"]
+                        nome_seguro = f"{chave.replace('|', '_').replace('/', '-')}_{arquivo.name}"
+                        caminho = ANEXOS_DIR / nome_seguro
+                        caminho.write_bytes(arquivo.getbuffer())
+                        salvar_justificativa_anexo(
+                            chave, user["transportadora"], arquivo.name, str(caminho), user["username"]
+                        )
+                        st.session_state[f"anexo_gen_{key_sufixo}"] = gen_anexo + 1
+                        st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
+                        st.rerun()
 
     if eh_admin:
         for idx in detalhe.index:
