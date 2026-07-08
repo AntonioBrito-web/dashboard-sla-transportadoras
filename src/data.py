@@ -374,8 +374,87 @@ _CATEGORIAS_DETALHE = {
 
 
 def detalhe_categoria(df: pd.DataFrame, categoria: str) -> tuple[pd.DataFrame, dict]:
+    if categoria == "saida":
+        return detalhe_saida_real(df)
     coluna_flag, colunas = _CATEGORIAS_DETALHE[categoria]
     filtrado = df[df[coluna_flag]].copy()
     campos = list(colunas.keys())
     detalhe = filtrado[["chave_viagem", "transportadora"] + campos].rename(columns=colunas)
     return detalhe.sort_values("Data", ascending=False), colunas
+
+
+COLS_DETALHE_SAIDA_REAL = {
+    "data": "Data",
+    "id_viagem": "ID Viagem",
+    "numero_linha": "Nº linha",
+    "secao_estrada": "Seção da estrada",
+    "placa": "Placa",
+    "modelo_veiculo": "Modelo do veículo",
+    "abreviatura": "Transportadora",
+    "origem": "Origem",
+    "planejado_saida": "Planejado saída",
+    "real_saida": "Real saída",
+    "motivo_saida_real": "Motivo do atraso saída",
+    "descricao_ocorrencia_saida_real": "Descrição detalhada da ocorrência saída",
+    "responsabilidade_saida_real": "Responsabilidade",
+}
+
+
+def detalhe_saida_real(df_escopo: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    # "Detalhe Atraso Saída" usa a aba Saída real como fonte (por pedido do
+    # usuário) — inclusive o filtro de atraso é o "Status saída" DESSA aba,
+    # não o da Aba Principal. df_escopo é o dataframe já filtrado por
+    # transportadora/mês/quinzena na tela; usamos as chaves dele (id viagem
+    # + seção da estrada, sem a data por causa do deslocamento de 1 dia
+    # entre as abas) só para restringir a Saída real ao mesmo recorte, e
+    # para reaproveitar a chave_viagem canônica (mesma usada nas
+    # justificativas em qualquer outro lugar do app).
+    bruto = fetch_saida_real_dataframe()
+
+    transportadora = bruto[COL_TRANSPORTADORA].astype(str).str.strip().replace(TRANSPORTADORA_CANONICA)
+    abrev_col = _abreviatura_col(bruto.columns)
+    abreviatura = _strip_cjk(bruto[abrev_col]) if abrev_col else transportadora
+    abreviatura = transportadora.map(ABREVIATURA_CANONICA).fillna(abreviatura)
+
+    status_saida_raw = bruto["Status saída"].astype(str)
+    fora_prazo = status_saida_raw.str.contains("Fora do prazo", case=False, na=False)
+
+    id_viagem = bruto["ID viagem"].astype(str)
+    secao_estrada = bruto["Seção da estrada"].astype(str)
+    chave_id_secao = id_viagem + "|" + secao_estrada
+
+    chave_lookup = pd.Series(
+        df_escopo["chave_viagem"].values,
+        index=df_escopo["id_viagem"].astype(str) + "|" + df_escopo["secao_estrada"].astype(str),
+    )
+    chave_lookup = chave_lookup[~chave_lookup.index.duplicated(keep="first")]
+    dentro_do_escopo = chave_id_secao.isin(chave_lookup.index)
+
+    mascara = fora_prazo & dentro_do_escopo
+
+    out = pd.DataFrame()
+    out["transportadora"] = transportadora
+    out["abreviatura"] = abreviatura
+    out["data"] = pd.to_datetime(bruto["Data"], format="%Y/%m/%d", errors="coerce")
+    out["id_viagem"] = id_viagem
+    out["numero_linha"] = bruto.get("Nome de linha")
+    out["secao_estrada"] = secao_estrada
+    out["placa"] = bruto.get("Placa do carro")
+    out["modelo_veiculo"] = bruto.get("Nome de modelo de veículo")
+    out["origem"] = bruto.get("Origem")
+    # Formato "AAAA/MM/DD HH:MM:SS" nesta aba (diferente da Aba Principal) —
+    # dayfirst=True inverteria mês e dia aqui.
+    out["planejado_saida"] = pd.to_datetime(bruto.get("Horário planejado de saída"), dayfirst=False, errors="coerce")
+    out["real_saida"] = pd.to_datetime(bruto.get("Horário real de saída"), dayfirst=False, errors="coerce")
+    out["motivo_saida_real"] = _strip_cjk(bruto.get("Motivos do atraso saída"))
+    out["descricao_ocorrencia_saida_real"] = _strip_cjk(bruto.get("Descrição detalhada da ocorrência saída"))
+    if "Responsabilidade" in bruto.columns:
+        out["responsabilidade_saida_real"] = bruto["Responsabilidade"].map(RESPONSABILIDADE_MOTIVO_SAIDA)
+    else:
+        out["responsabilidade_saida_real"] = pd.NA
+    out["chave_viagem"] = chave_id_secao.map(chave_lookup)
+
+    out = out[mascara].copy()
+    campos = list(COLS_DETALHE_SAIDA_REAL.keys())
+    detalhe = out[["chave_viagem", "transportadora"] + campos].rename(columns=COLS_DETALHE_SAIDA_REAL)
+    return detalhe.sort_values("Data", ascending=False), COLS_DETALHE_SAIDA_REAL
