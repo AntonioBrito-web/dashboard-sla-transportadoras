@@ -546,8 +546,12 @@ def render_tabela_detalhe(detalhe: pd.DataFrame, colunas: dict, user: dict, titu
                 )
                 caminho_anexo = Path(detalhe.loc[escolha_anexo, "_anexo_caminho"])
                 if caminho_anexo.exists():
+                    if caminho_anexo.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                        st.image(str(caminho_anexo), width="stretch")
+                    else:
+                        st.caption("Pré-visualização não disponível para este tipo de arquivo — use o botão abaixo.")
                     st.download_button(
-                        f"Abrir {detalhe.loc[escolha_anexo, 'Anexo']}",
+                        f"Baixar {detalhe.loc[escolha_anexo, 'Anexo']}",
                         data=caminho_anexo.read_bytes(),
                         file_name=detalhe.loc[escolha_anexo, "Anexo"],
                         key=f"ver_anexo_botao_{key_sufixo}",
@@ -621,16 +625,17 @@ def render_tabelas_transportadora(df: pd.DataFrame, user: dict) -> None:
 
 def render_table(df: pd.DataFrame) -> None:
     exibir = df[
-        ["data", "id_viagem", "status", "transportadora", "motorista", "placa", "origem", "destino", "regional"]
+        ["data", "id_viagem", "status", "abreviatura", "motorista", "placa", "origem", "destino", "regional"]
     ].copy()
     exibir["no_prazo_saida"] = df["no_prazo_saida"].map({True: "No prazo", False: "Fora do prazo"})
     exibir["no_prazo_chegada"] = df["no_prazo_chegada"].map({True: "No prazo", False: "Fora do prazo"})
+    exibir["no_prazo_transit"] = df["no_prazo_transit"].map({True: "No prazo", False: "Fora do prazo"})
     exibir = exibir.rename(
         columns={
             "data": "Data",
             "id_viagem": "ID Viagem",
             "status": "Status",
-            "transportadora": "Transportadora",
+            "abreviatura": "Transportadora",
             "motorista": "Motorista",
             "placa": "Placa",
             "origem": "Origem",
@@ -638,6 +643,7 @@ def render_table(df: pd.DataFrame) -> None:
             "regional": "Regional",
             "no_prazo_saida": "Saída",
             "no_prazo_chegada": "Chegada",
+            "no_prazo_transit": "Transit time",
         }
     )
     st.dataframe(
