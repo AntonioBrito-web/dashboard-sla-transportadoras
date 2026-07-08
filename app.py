@@ -45,13 +45,16 @@ st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
 
 @st.cache_resource(show_spinner="Carregando transportadoras...")
-def preparar_seed() -> None:
+def preparar_seed() -> str | None:
     # Só a semeadura fica em cache (rede + Google Sheets, é cara). O
     # init_db() NÃO pode ficar aqui dentro: se ele só rodasse uma vez por
     # processo, uma migração de esquema nova (ex.: colunas de aprovação)
     # nunca chegaria a rodar num processo que já estava de pé antes do
     # deploy — foi exatamente isso que quebrou a tabela de justificativas.
-    seed_all()
+    # Retorna a senha do admin SE uma conta nova precisou ser criada agora
+    # (ex.: disco zerado num reboot) — assim ela aparece na tela de login
+    # em vez de sumir só no log, como aconteceu da primeira vez.
+    return seed_all()
 
 
 def verificar_reset_admin() -> str | None:
@@ -108,9 +111,9 @@ def aplicar_padronizacao_usernames() -> None:
 
 
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
-preparar_seed()
+SENHA_ADMIN_RECEM_CRIADA = preparar_seed()
 aplicar_padronizacao_usernames()
-NOVA_SENHA_ADMIN = verificar_reset_admin()
+NOVA_SENHA_ADMIN = verificar_reset_admin() or SENHA_ADMIN_RECEM_CRIADA
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"

@@ -35,9 +35,9 @@ def gen_password(length: int = 10) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def ensure_admin() -> None:
+def ensure_admin() -> str | None:
     if admin_exists():
-        return
+        return None
     password = gen_password(14)
     create_user("admin", password, "admin")
     # Log sempre (visível nos logs do Streamlit Cloud); arquivo é só
@@ -47,6 +47,10 @@ def ensure_admin() -> None:
         ADMIN_CRED_FILE.write_text(f"usuario: admin\nsenha: {password}\n", encoding="utf-8")
     except OSError:
         pass
+    # Retorna a senha (em vez de só logar) para que o app.py possa exibi-la
+    # na própria tela de login — se o disco for zerado num reboot e isto
+    # recriar o admin do zero, ninguém fica sem saber a senha nova.
+    return password
 
 
 def reset_admin_password() -> str:
@@ -149,6 +153,7 @@ def padronizar_usernames_transportadora() -> int:
     return renomeados
 
 
-def seed_all() -> None:
-    ensure_admin()
+def seed_all() -> str | None:
+    senha_admin_criada = ensure_admin()
     ensure_transportadora_accounts()
+    return senha_admin_criada
