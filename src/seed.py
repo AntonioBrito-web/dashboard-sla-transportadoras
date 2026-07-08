@@ -4,8 +4,16 @@ import string
 import unicodedata
 from pathlib import Path
 
-from src.auth import admin_exists, create_user, existing_transportadoras, existing_usernames, set_password
-from src.data import load_transportadoras
+from src.auth import (
+    admin_exists,
+    create_user,
+    existing_transportadoras,
+    existing_usernames,
+    list_transportadora_users,
+    set_password,
+)
+from src.data import load_transportadoras, load_transportadoras_com_abreviatura
+from src.db import renomear_username
 
 ROOT = Path(__file__).resolve().parent.parent
 ADMIN_CRED_FILE = ROOT / "admin_credentials.txt"
@@ -62,6 +70,12 @@ def reset_transportadora_password(username: str) -> str:
     return nova_senha
 
 
+def _username_transportadora(nome: str, mapa_abreviatura: dict) -> str:
+    abreviatura = mapa_abreviatura.get(nome)
+    base = f"{slugify(abreviatura)}_logistica" if abreviatura else slugify(nome)
+    return base
+
+
 def ensure_transportadora_accounts() -> list[dict]:
     ja_cadastradas = existing_transportadoras()
     usernames = existing_usernames()
@@ -72,9 +86,11 @@ def ensure_transportadora_accounts() -> list[dict]:
     if not novas:
         return []
 
+    mapa_abreviatura = load_transportadoras_com_abreviatura()
+
     novos_registros = []
     for nome in novas:
-        base_slug = slugify(nome)
+        base_slug = _username_transportadora(nome, mapa_abreviatura)
         slug = base_slug
         i = 1
         while slug in usernames:
@@ -98,6 +114,39 @@ def ensure_transportadora_accounts() -> list[dict]:
         pass
 
     return novos_registros
+
+
+def padronizar_usernames_transportadora() -> int:
+    # Renomeia contas já existentes para o padrão abreviatura_logistica,
+    # preservando senha/hash — só troca o username usado no login.
+    mapa_abreviatura = load_transportadoras_com_abreviatura()
+    usuarios = list_transportadora_users()
+    usernames_existentes = existing_usernames()
+
+    renomeados = 0
+    for u in usuarios:
+        username_antigo = u["username"]
+        nome = u["transportadora"]
+        abreviatura = mapa_abreviatura.get(nome)
+        if not abreviatura:
+            continue
+        base_slug = f"{slugify(abreviatura)}_logistica"
+        if base_slug == username_antigo:
+            continue
+
+        usernames_existentes.discard(username_antigo)
+        novo_username = base_slug
+        i = 1
+        while novo_username in usernames_existentes:
+            i += 1
+            novo_username = f"{base_slug}{i}"
+        usernames_existentes.add(novo_username)
+
+        renomear_username(username_antigo, novo_username)
+        print(f"[seed] Username padronizado: {username_antigo} -> {novo_username} ({nome})")
+        renomeados += 1
+
+    return renomeados
 
 
 def seed_all() -> None:

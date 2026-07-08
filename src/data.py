@@ -225,6 +225,20 @@ def load_transportadoras() -> list[str]:
     return sorted(valores.unique().tolist())
 
 
+def load_transportadoras_com_abreviatura() -> dict:
+    # Leve de propósito (sem parse de datas nem a mesclagem com a aba Saída
+    # real) — usada só para padronizar nomes de usuário, não pro dashboard.
+    df = fetch_raw_dataframe()
+    transportadora = df[COL_TRANSPORTADORA].astype(str).str.strip().replace(TRANSPORTADORA_CANONICA)
+    abrev_col = _abreviatura_col(df.columns)
+    abreviatura = _strip_cjk(df[abrev_col]) if abrev_col else transportadora
+    abreviatura = transportadora.map(ABREVIATURA_CANONICA).fillna(abreviatura)
+    tmp = pd.DataFrame({"transportadora": transportadora, "abreviatura": abreviatura})
+    tmp = tmp[(tmp["transportadora"] != "") & tmp["abreviatura"].notna() & (tmp["abreviatura"] != "")]
+    moda = tmp.groupby("transportadora")["abreviatura"].agg(lambda s: s.value_counts().idxmax())
+    return moda.to_dict()
+
+
 def compute_kpis(df: pd.DataFrame) -> dict:
     total = len(df)
     com_saida = df["no_prazo_saida"].sum() + df["fora_prazo_saida"].sum()

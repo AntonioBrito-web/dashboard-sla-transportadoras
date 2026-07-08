@@ -85,8 +85,21 @@ def verificar_reset_admin() -> str | None:
     return None
 
 
+def aplicar_padronizacao_usernames() -> None:
+    # Roda só uma vez (flag gravada no banco, não em cache de processo) —
+    # renomeia contas de transportadora já existentes para o padrão
+    # abreviatura_logistica.
+    if get_meta("usernames_padronizados") == "true":
+        return
+    from src.seed import padronizar_usernames_transportadora
+
+    padronizar_usernames_transportadora()
+    set_meta("usernames_padronizados", "true")
+
+
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
 preparar_seed()
+aplicar_padronizacao_usernames()
 NOVA_SENHA_ADMIN = verificar_reset_admin()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -579,6 +592,17 @@ def render_gerenciar_senhas() -> None:
             nova_senha = reset_transportadora_password(username)
             st.success(f"Nova senha para `{username}`: `{nova_senha}`")
             st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+
+        st.divider()
+        st.caption("Renomeia contas antigas para o padrão abreviatura_logistica (mantém a senha).")
+        if st.button("Padronizar nomes de usuário", key="padronizar_usernames_botao"):
+            from src.seed import padronizar_usernames_transportadora
+
+            qtd = padronizar_usernames_transportadora()
+            if qtd:
+                st.success(f"{qtd} nome(s) de usuário padronizado(s).")
+            else:
+                st.info("Todos os nomes de usuário já estão padronizados.")
 
 
 def dashboard_screen(user: dict) -> None:

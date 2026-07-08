@@ -188,3 +188,10 @@ def chaves_reprovadas(transportadora: str) -> list[str]:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+def renomear_username(username_antigo: str, username_novo: str) -> None:
+    conn = get_connection()
+    conn.execute("UPDATE users SET username = ? WHERE username = ?", (username_novo, username_antigo))
+    conn.commit()
+    conn.close()
