@@ -18,6 +18,22 @@ from src.db import renomear_username
 ROOT = Path(__file__).resolve().parent.parent
 ADMIN_CRED_FILE = ROOT / "admin_credentials.txt"
 TRANSPORTADORA_CRED_FILE = ROOT / "credenciais_transportadoras.csv"
+INTERNOS_CRED_FILE = ROOT / "credenciais_internos.csv"
+
+# Lista fixa pedida pelo usuário: pessoal interno com acesso "como admin"
+# (visualização completa, sem gerenciar senhas nem editar justificativas) e
+# duas pessoas com acesso admin pleno (igual à conta admin original).
+USUARIOS_INTERNOS_SEED = [
+    ("Carlos Vinicius de Souza Oliveira", "interno"),
+    ("SILMARA CAETANO DE BARROS", "interno"),
+    ("FERNANDA PEREIRA DA SILVA", "interno"),
+    ("Leandro Ramos", "interno"),
+    ("DIEGO SOUSA SANTOS", "interno"),
+    ("JONATAN NASCIMENTO", "interno"),
+    ("DOUGLAS GOMES ALVES", "interno"),
+    ("ANA CARLA DE JESUS MARQUES", "admin"),
+    ("Antonio Carlos Ramos Brito", "admin"),
+]
 
 
 def slugify(name: str) -> str:
@@ -33,6 +49,16 @@ def slugify(name: str) -> str:
 def gen_password(length: int = 10) -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _username_pessoa(nome: str) -> str:
+    # Padrão pedido: primeiro_nome + "_" + ultimo_nome (ignora nomes do meio).
+    partes = [p for p in nome.strip().split() if p]
+    if not partes:
+        return slugify(nome)
+    primeiro = partes[0]
+    ultimo = partes[-1] if len(partes) > 1 else partes[0]
+    return f"{slugify(primeiro)}_{slugify(ultimo)}"
 
 
 def ensure_admin() -> str | None:
@@ -68,10 +94,7 @@ def reset_admin_password() -> str:
 
 
 def reset_transportadora_password(username: str) -> str:
-    nova_senha = gen_password(10)
-    set_password(username, nova_senha)
-    print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}")
-    return nova_senha
+    return reset_user_password(username)
 
 
 def _username_transportadora(nome: str, mapa_abreviatura: dict) -> str:
@@ -118,6 +141,61 @@ def ensure_transportadora_accounts() -> list[dict]:
         pass
 
     return novos_registros
+
+
+def ensure_usuarios_internos() -> list[dict]:
+    # Diferente de ensure_transportadora_accounts, esta função NÃO roda
+    # sozinha a cada boot do app — é disparada pelo admin pelo painel
+    # "Gerenciar acessos internos". Motivo: as senhas geradas só podem
+    # aparecer numa tela que exige login (o botão do admin), nunca na tela
+    # de login pública como acontece com a senha do admin bootstrap.
+    usernames_existentes = existing_usernames()
+    novos = []
+    for nome, role in USUARIOS_INTERNOS_SEED:
+        username = _username_pessoa(nome)
+        if username in usernames_existentes:
+            continue  # já semeado numa rodada anterior
+        senha = gen_password(10)
+        create_user(username, senha, role, transportadora=None)
+        usernames_existentes.add(username)
+        novos.append({"nome": nome, "usuario": username, "senha": senha, "role": role})
+        print(f"[seed] Conta interna criada. usuario={username} role={role} nome={nome}")
+
+    if novos:
+        try:
+            arquivo_novo = not INTERNOS_CRED_FILE.exists()
+            with open(INTERNOS_CRED_FILE, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=["nome", "usuario", "senha", "role"])
+                if arquivo_novo:
+                    writer.writeheader()
+                writer.writerows(novos)
+        except OSError:
+            pass
+
+    return novos
+
+
+def criar_acesso_interno(nome: str, role: str, email: str = "") -> dict:
+    # Cadastro avulso pelo painel do admin — usa o mesmo padrão de username
+    # (primeiro_ultimo), com sufixo numérico só em caso de colisão real.
+    usernames_existentes = existing_usernames()
+    base = _username_pessoa(nome)
+    username = base
+    i = 1
+    while username in usernames_existentes:
+        i += 1
+        username = f"{base}{i}"
+    senha = gen_password(10)
+    create_user(username, senha, role, transportadora=None, email=email.strip() or None)
+    print(f"[seed] Conta interna criada (cadastro avulso). usuario={username} role={role} nome={nome}")
+    return {"nome": nome, "usuario": username, "senha": senha, "role": role}
+
+
+def reset_user_password(username: str) -> str:
+    nova_senha = gen_password(10)
+    set_password(username, nova_senha)
+    print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}")
+    return nova_senha
 
 
 def padronizar_usernames_transportadora() -> int:

@@ -4,7 +4,15 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src.auth import admin_exists, authenticate, list_transportadora_users
+from src.auth import (
+    admin_exists,
+    authenticate,
+    list_internal_users,
+    list_transportadora_users,
+    set_email,
+    set_password,
+    verify_password,
+)
 from src.config import CACHE_TTL_SECONDS
 from src.data import (
     clean_dataframe,
@@ -28,7 +36,7 @@ from src.db import (
     salvar_justificativa_texto,
     set_meta,
 )
-from src.seed import reset_transportadora_password, seed_all
+from src.seed import criar_acesso_interno, ensure_usuarios_internos, reset_transportadora_password, reset_user_password, seed_all
 from src.theme import BRAND_RED, chart_colors
 
 
@@ -429,10 +437,14 @@ def render_tabela_detalhe(
     )
 
     pode_editar = user["role"] == "transportadora"
-    eh_admin = user["role"] == "admin"
+    pode_aprovar = user["role"] == "admin"
+    # "interno" enxerga a mesma tela do admin (todas as transportadoras,
+    # coluna Decisão, anexos), mas nunca edita nada — nem justificativa nem
+    # a decisão de aprovação, só o admin de fato faz isso.
+    ve_como_admin = user["role"] in ("admin", "interno")
 
     colunas_exibir = list(colunas.values()) + ["Justificativa", "Anexo"]
-    if eh_admin:
+    if ve_como_admin:
         detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
         colunas_exibir = colunas_exibir + ["Decisão"]
 
@@ -443,7 +455,7 @@ def render_tabela_detalhe(
         # mas sem anexo). Isso é o que garante o bloqueio: uma vez escrita,
         # só o admin mexe nela de novo (reprovando).
         desabilitadas = colunas_exibir
-    elif eh_admin:
+    elif pode_aprovar:
         # só a Decisão é editável, e só quando existe justificativa pra avaliar
         desabilitadas = [c for c in colunas_exibir if c != "Decisão"]
     else:
@@ -453,7 +465,7 @@ def render_tabela_detalhe(
     for col_datahora in ("Previsto chegada", "Real chegada", "Planejado saída", "Real saída"):
         if col_datahora in colunas_exibir:
             config_colunas[col_datahora] = st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
-    if eh_admin:
+    if pode_aprovar:
         config_colunas["Decisão"] = st.column_config.SelectboxColumn(
             options=["Pendente", "Aprovado", "Reprovado"]
         )
@@ -524,7 +536,7 @@ def render_tabela_detalhe(
                         st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
                         st.rerun()
 
-    if eh_admin:
+    if ve_como_admin:
         com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_anexo_caminho"]]
         with st.expander(f"Ver anexos ({len(com_anexo)})"):
             if not com_anexo:
@@ -551,6 +563,7 @@ def render_tabela_detalhe(
                 else:
                     st.error("Arquivo não encontrado no servidor (pode ter sido perdido num reinício do app).")
 
+    if pode_aprovar:
         for idx in detalhe.index:
             chave = detalhe.loc[idx, "chave_viagem"]
             chave_id = chave.replace("|", "_").replace("/", "-")
@@ -608,9 +621,9 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
     detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
 
-    if user["role"] == "admin":
-        # No admin, as 3 viram abas clicáveis em vez de empilhadas — menos
-        # rolagem pra achar a que interessa.
+    if user["role"] in ("admin", "interno"):
+        # No admin/interno, as 3 viram abas clicáveis em vez de empilhadas —
+        # menos rolagem pra achar a que interessa.
         aba_saida, aba_chegada, aba_transit = st.tabs(
             ["Detalhe Atraso Saída", "Detalhe Atraso Chegada", "Detalhe Atraso Transit time"]
         )
@@ -664,13 +677,22 @@ def render_gerenciar_senhas() -> None:
         if not usuarios:
             st.caption("Nenhuma conta de transportadora encontrada.")
             return
-        opcoes = {f"{u['transportadora']} ({u['username']})": u["username"] for u in usuarios}
+        opcoes = {f"{u['transportadora']} ({u['username']})": u for u in usuarios}
         escolha_label = st.selectbox("Transportadora", list(opcoes.keys()), key="reset_senha_transp_sel")
+        usuario_selecionado = opcoes[escolha_label]
         if st.button("Gerar nova senha", key="reset_senha_transp_botao"):
-            username = opcoes[escolha_label]
-            nova_senha = reset_transportadora_password(username)
-            st.success(f"Nova senha para `{username}`: `{nova_senha}`")
+            nova_senha = reset_transportadora_password(usuario_selecionado["username"])
+            st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
             st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+
+        st.caption("E-mail cadastrado (usado para a transportadora trocar a própria senha).")
+        novo_email = st.text_input(
+            "E-mail", value=usuario_selecionado["email"], key=f"email_transp_{usuario_selecionado['username']}"
+        )
+        if st.button("Salvar e-mail", key="salvar_email_transp_botao"):
+            set_email(usuario_selecionado["username"], novo_email)
+            st.success("E-mail atualizado.")
+            st.rerun()
 
         st.divider()
         st.caption("Renomeia contas antigas para o padrão abreviatura_logistica (mantém a senha).")
@@ -684,6 +706,90 @@ def render_gerenciar_senhas() -> None:
                 st.info("Todos os nomes de usuário já estão padronizados.")
 
 
+def render_gerenciar_acessos_internos() -> None:
+    with st.sidebar.expander("Gerenciar acessos internos"):
+        st.caption(
+            "Contas de uso interno (não-transportadora): admin pleno ou "
+            "visualização completa sem editar justificativas nem gerenciar senhas."
+        )
+        if st.button("Criar contas padrão da lista", key="seed_internos_botao"):
+            novos = ensure_usuarios_internos()
+            if novos:
+                st.success(f"{len(novos)} conta(s) criada(s):")
+                for reg in novos:
+                    st.code(f"{reg['nome']} — usuário: {reg['usuario']} — senha: {reg['senha']} — {reg['role']}")
+                st.caption("Copie agora — essas senhas não ficam salvas em nenhuma tela depois de sair daqui.")
+            else:
+                st.info("Todas as contas da lista padrão já existem.")
+
+        st.divider()
+        usuarios = list_internal_users()
+        if usuarios:
+            opcoes = {f"{u['username']} ({u['role']})": u for u in usuarios}
+            escolha_label = st.selectbox("Conta", list(opcoes.keys()), key="reset_senha_interno_sel")
+            usuario_selecionado = opcoes[escolha_label]
+            if st.button("Gerar nova senha", key="reset_senha_interno_botao"):
+                nova_senha = reset_user_password(usuario_selecionado["username"])
+                st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
+                st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+
+            novo_email = st.text_input(
+                "E-mail", value=usuario_selecionado["email"], key=f"email_interno_{usuario_selecionado['username']}"
+            )
+            if st.button("Salvar e-mail", key="salvar_email_interno_botao"):
+                set_email(usuario_selecionado["username"], novo_email)
+                st.success("E-mail atualizado.")
+                st.rerun()
+
+        st.divider()
+        st.caption("Cadastro avulso de um novo acesso interno.")
+        nome_novo = st.text_input("Nome completo", key="novo_interno_nome")
+        email_novo = st.text_input("E-mail", key="novo_interno_email")
+        role_novo = st.selectbox(
+            "Nível de acesso",
+            ["Interno (visualização, sem editar/gerenciar senhas)", "Admin (acesso pleno)"],
+            key="novo_interno_role",
+        )
+        if st.button("Criar acesso", key="novo_interno_botao"):
+            if not nome_novo.strip():
+                st.warning("Informe o nome completo.", icon="⚠️")
+            else:
+                role = "admin" if role_novo.startswith("Admin") else "interno"
+                registro = criar_acesso_interno(nome_novo.strip(), role, email_novo)
+                st.success(
+                    f"Conta criada — usuário: `{registro['usuario']}` — senha: `{registro['senha']}`"
+                )
+                st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+
+
+def render_alterar_senha(user: dict) -> None:
+    with st.sidebar.expander("Alterar minha senha"):
+        email_cadastrado = (user.get("email") or "").strip().lower()
+        if not email_cadastrado:
+            st.caption(
+                "Nenhum e-mail cadastrado nesta conta ainda — peça ao admin para "
+                "cadastrar um e-mail antes de trocar a senha por aqui."
+            )
+            return
+        st.caption("Por segurança, confirme o e-mail cadastrado nesta conta.")
+        email_confirma = st.text_input("E-mail cadastrado", key="chsenha_email")
+        senha_atual = st.text_input("Senha atual", type="password", key="chsenha_atual")
+        nova = st.text_input("Nova senha", type="password", key="chsenha_nova")
+        confirma = st.text_input("Confirmar nova senha", type="password", key="chsenha_confirma")
+        if st.button("Alterar senha", key="chsenha_botao"):
+            if email_confirma.strip().lower() != email_cadastrado:
+                st.error("E-mail não confere com o cadastrado.")
+            elif not verify_password(senha_atual, user["password_hash"]):
+                st.error("Senha atual incorreta.")
+            elif not nova or nova != confirma:
+                st.error("Nova senha e confirmação não conferem.")
+            elif len(nova) < 6:
+                st.error("Nova senha deve ter pelo menos 6 caracteres.")
+            else:
+                set_password(user["username"], nova)
+                st.success("Senha alterada com sucesso! Use a nova senha no próximo login.")
+
+
 def dashboard_screen(user: dict) -> None:
     df = load_data()
 
@@ -692,10 +798,13 @@ def dashboard_screen(user: dict) -> None:
 
     if user["role"] == "admin":
         render_gerenciar_senhas()
+        render_gerenciar_acessos_internos()
+
+    render_alterar_senha(user)
 
     colors = chart_colors(get_theme_mode())
 
-    if user["role"] == "admin":
+    if user["role"] in ("admin", "interno"):
         opcoes = ["Todas"] + sorted(df["transportadora"].dropna().unique().tolist())
         selecionada = st.sidebar.selectbox("Transportadora", opcoes)
         if selecionada != "Todas":
@@ -738,7 +847,7 @@ def dashboard_screen(user: dict) -> None:
         render_motivos_chart(df, colors)
 
     st.divider()
-    if user["role"] == "admin":
+    if user["role"] in ("admin", "interno"):
         col3, col4 = st.columns(2)
         with col3:
             st.subheader("Viagens por regional")
@@ -751,7 +860,7 @@ def dashboard_screen(user: dict) -> None:
     st.subheader("Viagens")
     render_table(df)
 
-    if user["role"] in ("transportadora", "admin"):
+    if user["role"] in ("transportadora", "admin", "interno"):
         st.divider()
         render_tabelas_fixas(df, user)
 

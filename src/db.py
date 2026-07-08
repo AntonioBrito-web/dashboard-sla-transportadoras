@@ -15,6 +15,40 @@ def get_connection() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
 
+def _migrar_tabela_users(conn: sqlite3.Connection) -> None:
+    # SQLite não permite alterar CHECK constraints com ALTER TABLE, então
+    # quando o banco existente ainda tem o CHECK antigo (sem 'interno') é
+    # preciso reconstruir a tabela. Detecta isso lendo o SQL de criação
+    # gravado no sqlite_master — só reconstrói se realmente precisar.
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()
+    if row is None or "'interno'" in row[0]:
+        return
+    colunas_existentes = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if "email" not in colunas_existentes:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    conn.execute("ALTER TABLE users RENAME TO users_old")
+    conn.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'transportadora', 'interno')),
+            transportadora TEXT,
+            email TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, role, transportadora, email, created_at) "
+        "SELECT id, username, password_hash, role, transportadora, email, created_at FROM users_old"
+    )
+    conn.execute("DROP TABLE users_old")
+
+
 def init_db() -> None:
     conn = get_connection()
     conn.execute(
@@ -23,12 +57,17 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('admin', 'transportadora')),
+            role TEXT NOT NULL CHECK(role IN ('admin', 'transportadora', 'interno')),
             transportadora TEXT,
+            email TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """
     )
+    _migrar_tabela_users(conn)
+    colunas_users = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if "email" not in colunas_users:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS justificativas (

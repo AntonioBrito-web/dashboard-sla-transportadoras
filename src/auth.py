@@ -14,7 +14,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def get_user(username: str) -> dict | None:
     conn = get_connection()
     row = conn.execute(
-        "SELECT id, username, password_hash, role, transportadora FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, role, transportadora, email FROM users WHERE username = ?",
         (username,),
     ).fetchone()
     conn.close()
@@ -26,6 +26,7 @@ def get_user(username: str) -> dict | None:
         "password_hash": row[2],
         "role": row[3],
         "transportadora": row[4],
+        "email": row[5],
     }
 
 
@@ -36,11 +37,13 @@ def authenticate(username: str, password: str) -> dict | None:
     return user
 
 
-def create_user(username: str, password: str, role: str, transportadora: str | None = None) -> None:
+def create_user(
+    username: str, password: str, role: str, transportadora: str | None = None, email: str | None = None
+) -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO users (username, password_hash, role, transportadora) VALUES (?, ?, ?, ?)",
-        (username, hash_password(password), role, transportadora),
+        "INSERT INTO users (username, password_hash, role, transportadora, email) VALUES (?, ?, ?, ?, ?)",
+        (username, hash_password(password), role, transportadora, email),
     )
     conn.commit()
     conn.close()
@@ -72,10 +75,19 @@ def admin_exists() -> bool:
 def list_transportadora_users() -> list[dict]:
     conn = get_connection()
     rows = conn.execute(
-        "SELECT username, transportadora FROM users WHERE role = 'transportadora' ORDER BY transportadora"
+        "SELECT username, transportadora, email FROM users WHERE role = 'transportadora' ORDER BY transportadora"
     ).fetchall()
     conn.close()
-    return [{"username": r[0], "transportadora": r[1]} for r in rows]
+    return [{"username": r[0], "transportadora": r[1], "email": r[2] or ""} for r in rows]
+
+
+def list_internal_users() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT username, role, email FROM users WHERE role IN ('admin', 'interno') ORDER BY role, username"
+    ).fetchall()
+    conn.close()
+    return [{"username": r[0], "role": r[1], "email": r[2] or ""} for r in rows]
 
 
 def set_password(username: str, new_password: str) -> None:
@@ -83,6 +95,16 @@ def set_password(username: str, new_password: str) -> None:
     conn.execute(
         "UPDATE users SET password_hash = ? WHERE username = ?",
         (hash_password(new_password), username),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_email(username: str, email: str) -> None:
+    conn = get_connection()
+    conn.execute(
+        "UPDATE users SET email = ? WHERE username = ?",
+        (email.strip(), username),
     )
     conn.commit()
     conn.close()

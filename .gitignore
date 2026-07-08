@@ -4,4 +4,5 @@ __pycache__/
 data/
 admin_credentials.txt
 credenciais_transportadoras.csv
+credenciais_internos.csv
 .streamlit/secrets.toml
