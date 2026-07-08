@@ -73,11 +73,15 @@ def verificar_reset_admin() -> str | None:
     ja_aplicado = get_meta("reset_admin_aplicado") == "true"
 
     if secret_ativo and not ja_aplicado:
-        from src.seed import reset_admin_password
+        try:
+            from src.seed import reset_admin_password
 
-        nova_senha = reset_admin_password()
-        set_meta("reset_admin_aplicado", "true")
-        return nova_senha
+            nova_senha = reset_admin_password()
+            set_meta("reset_admin_aplicado", "true")
+            return nova_senha
+        except Exception as e:
+            print(f"[seed] Falha ao redefinir senha do admin: {e}")
+            return None
 
     if not secret_ativo and ja_aplicado:
         set_meta("reset_admin_aplicado", "false")
@@ -88,13 +92,19 @@ def verificar_reset_admin() -> str | None:
 def aplicar_padronizacao_usernames() -> None:
     # Roda só uma vez (flag gravada no banco, não em cache de processo) —
     # renomeia contas de transportadora já existentes para o padrão
-    # abreviatura_logistica.
+    # abreviatura_logistica. Qualquer falha aqui (ex.: processo com um
+    # sys.modules desatualizado após um deploy) não pode derrubar o app
+    # inteiro — na pior hipótese, o admin refaz isso manualmente pelo botão
+    # "Padronizar nomes de usuário" no painel lateral.
     if get_meta("usernames_padronizados") == "true":
         return
-    from src.seed import padronizar_usernames_transportadora
+    try:
+        from src.seed import padronizar_usernames_transportadora
 
-    padronizar_usernames_transportadora()
-    set_meta("usernames_padronizados", "true")
+        padronizar_usernames_transportadora()
+        set_meta("usernames_padronizados", "true")
+    except Exception as e:
+        print(f"[seed] Falha ao padronizar usernames automaticamente: {e}")
 
 
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
