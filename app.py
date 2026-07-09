@@ -91,7 +91,7 @@ def verificar_reset_admin() -> str | None:
             set_meta("reset_admin_valor", valor_secret)
             return nova_senha
         except Exception as e:
-            print(f"[seed] Falha ao redefinir senha do admin: {e}")
+            print(f"[seed] Falha ao redefinir senha do admin: {e}", flush=True)
             return None
 
     if not valor_secret and ultimo_valor_aplicado:
@@ -115,7 +115,7 @@ def aplicar_padronizacao_usernames() -> None:
         padronizar_usernames_transportadora()
         set_meta("usernames_padronizados", "true")
     except Exception as e:
-        print(f"[seed] Falha ao padronizar usernames automaticamente: {e}")
+        print(f"[seed] Falha ao padronizar usernames automaticamente: {e}", flush=True)
 
 
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado

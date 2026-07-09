@@ -68,7 +68,7 @@ def ensure_admin() -> str | None:
     create_user("admin", password, "admin")
     # Log sempre (visível nos logs do Streamlit Cloud); arquivo é só
     # conveniência local — se o disco for somente leitura, ignora.
-    print(f"[seed] Conta admin criada. usuario=admin senha={password}")
+    print(f"[seed] Conta admin criada. usuario=admin senha={password}", flush=True)
     try:
         ADMIN_CRED_FILE.write_text(f"usuario: admin\nsenha: {password}\n", encoding="utf-8")
     except OSError:
@@ -85,7 +85,7 @@ def reset_admin_password() -> str:
         set_password("admin", nova_senha)
     else:
         create_user("admin", nova_senha, "admin")
-    print(f"[seed] Senha do admin redefinida. usuario=admin senha={nova_senha}")
+    print(f"[seed] Senha do admin redefinida. usuario=admin senha={nova_senha}", flush=True)
     try:
         ADMIN_CRED_FILE.write_text(f"usuario: admin\nsenha: {nova_senha}\n", encoding="utf-8")
     except OSError:
@@ -128,7 +128,7 @@ def ensure_transportadora_accounts() -> list[dict]:
         senha = gen_password(10)
         create_user(slug, senha, "transportadora", transportadora=nome)
         novos_registros.append({"transportadora": nome, "usuario": slug, "senha": senha})
-        print(f"[seed] Conta transportadora criada. usuario={slug} senha={senha} transportadora={nome}")
+        print(f"[seed] Conta transportadora criada. usuario={slug} senha={senha} transportadora={nome}", flush=True)
 
     try:
         arquivo_novo = not TRANSPORTADORA_CRED_FILE.exists()
@@ -159,7 +159,7 @@ def ensure_usuarios_internos() -> list[dict]:
         create_user(username, senha, role, transportadora=None)
         usernames_existentes.add(username)
         novos.append({"nome": nome, "usuario": username, "senha": senha, "role": role})
-        print(f"[seed] Conta interna criada. usuario={username} role={role} nome={nome}")
+        print(f"[seed] Conta interna criada. usuario={username} role={role} nome={nome}", flush=True)
 
     if novos:
         try:
@@ -187,14 +187,14 @@ def criar_acesso_interno(nome: str, role: str, email: str = "") -> dict:
         username = f"{base}{i}"
     senha = gen_password(10)
     create_user(username, senha, role, transportadora=None, email=email.strip() or None)
-    print(f"[seed] Conta interna criada (cadastro avulso). usuario={username} role={role} nome={nome}")
+    print(f"[seed] Conta interna criada (cadastro avulso). usuario={username} role={role} nome={nome}", flush=True)
     return {"nome": nome, "usuario": username, "senha": senha, "role": role}
 
 
 def reset_user_password(username: str) -> str:
     nova_senha = gen_password(10)
     set_password(username, nova_senha)
-    print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}")
+    print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}", flush=True)
     return nova_senha
 
 
@@ -225,7 +225,7 @@ def padronizar_usernames_transportadora() -> int:
         usernames_existentes.add(novo_username)
 
         renomear_username(username_antigo, novo_username)
-        print(f"[seed] Username padronizado: {username_antigo} -> {novo_username} ({nome})")
+        print(f"[seed] Username padronizado: {username_antigo} -> {novo_username} ({nome})", flush=True)
         renomeados += 1
 
     return renomeados
