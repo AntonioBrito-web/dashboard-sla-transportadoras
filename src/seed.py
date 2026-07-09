@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import secrets
 import string
 import unicodedata
@@ -51,6 +52,41 @@ def gen_password(length: int = 10) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def _segredo_senha() -> str:
+    # Lido do secret SEED_SECRET no Streamlit Cloud (Settings -> Secrets).
+    # Sugestão: usar uma data fixa no formato ddmmaaaa (ex.: "09072026").
+    # Fallback embutido garante que a semeadura automática continue
+    # funcionando mesmo antes do secret ser configurado — mas o segredo
+    # real só fica seguro depois de configurado nos Secrets (não commitado).
+    try:
+        import streamlit as st
+
+        valor = str(st.secrets.get("SEED_SECRET", "")).strip()
+    except Exception:
+        valor = ""
+    return valor or "JTEXPRESS-SLA-PADRAO"
+
+
+def senha_padrao(username: str, length: int = 10) -> str:
+    # Senha determinística: mesmo username + mesmo SEED_SECRET sempre
+    # gera a mesma senha. É o que garante que, se o Streamlit Cloud zerar
+    # o disco (redeploy ou reboot), as contas recriadas automaticamente
+    # (admin, transportadoras, internos) voltem com a MESMA senha de
+    # sempre — sem depender de log nem de redistribuir credencial nova.
+    segredo = _segredo_senha()
+    alphabet = string.ascii_letters + string.digits
+    senha_chars: list[str] = []
+    contador = 0
+    while len(senha_chars) < length:
+        digest = hashlib.sha256(f"{segredo}:{username}:{contador}".encode("utf-8")).digest()
+        for b in digest:
+            if len(senha_chars) >= length:
+                break
+            senha_chars.append(alphabet[b % len(alphabet)])
+        contador += 1
+    return "".join(senha_chars)
+
+
 def _username_pessoa(nome: str) -> str:
     # Padrão pedido: primeiro_nome + "_" + ultimo_nome (ignora nomes do meio).
     partes = [p for p in nome.strip().split() if p]
@@ -64,7 +100,7 @@ def _username_pessoa(nome: str) -> str:
 def ensure_admin() -> str | None:
     if admin_exists():
         return None
-    password = gen_password(14)
+    password = senha_padrao("admin", 14)
     create_user("admin", password, "admin")
     # Log sempre (visível nos logs do Streamlit Cloud); arquivo é só
     # conveniência local — se o disco for somente leitura, ignora.
@@ -80,7 +116,7 @@ def ensure_admin() -> str | None:
 
 
 def reset_admin_password() -> str:
-    nova_senha = gen_password(14)
+    nova_senha = senha_padrao("admin", 14)
     if admin_exists():
         set_password("admin", nova_senha)
     else:
@@ -125,7 +161,7 @@ def ensure_transportadora_accounts() -> list[dict]:
             slug = f"{base_slug}{i}"
         usernames.add(slug)
 
-        senha = gen_password(10)
+        senha = senha_padrao(slug)
         create_user(slug, senha, "transportadora", transportadora=nome)
         novos_registros.append({"transportadora": nome, "usuario": slug, "senha": senha})
         print(f"[seed] Conta transportadora criada. usuario={slug} senha={senha} transportadora={nome}", flush=True)
@@ -144,18 +180,19 @@ def ensure_transportadora_accounts() -> list[dict]:
 
 
 def ensure_usuarios_internos() -> list[dict]:
-    # Diferente de ensure_transportadora_accounts, esta função NÃO roda
-    # sozinha a cada boot do app — é disparada pelo admin pelo painel
-    # "Gerenciar acessos internos". Motivo: as senhas geradas só podem
-    # aparecer numa tela que exige login (o botão do admin), nunca na tela
-    # de login pública como acontece com a senha do admin bootstrap.
+    # Roda a cada boot (dentro de seed_all), igual às contas de
+    # transportadora: como a senha agora é determinística (senha_padrao),
+    # não tem problema recriar sozinho depois de um wipe — a senha volta
+    # sendo sempre a mesma, sem precisar expor nada novo em tela pública.
+    # O botão "Criar contas padrão da lista" no admin continua existindo
+    # como atalho manual (idempotente, útil se quiser forçar/conferir).
     usernames_existentes = existing_usernames()
     novos = []
     for nome, role in USUARIOS_INTERNOS_SEED:
         username = _username_pessoa(nome)
         if username in usernames_existentes:
             continue  # já semeado numa rodada anterior
-        senha = gen_password(10)
+        senha = senha_padrao(username)
         create_user(username, senha, role, transportadora=None)
         usernames_existentes.add(username)
         novos.append({"nome": nome, "usuario": username, "senha": senha, "role": role})
@@ -234,4 +271,5 @@ def padronizar_usernames_transportadora() -> int:
 def seed_all() -> str | None:
     senha_admin_criada = ensure_admin()
     ensure_transportadora_accounts()
+    ensure_usuarios_internos()
     return senha_admin_criada

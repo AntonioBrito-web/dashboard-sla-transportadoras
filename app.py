@@ -35,7 +35,14 @@ from src.db import (
     salvar_justificativa_texto,
     set_meta,
 )
-from src.seed import criar_acesso_interno, ensure_usuarios_internos, reset_transportadora_password, reset_user_password, seed_all
+from src.seed import (
+    criar_acesso_interno,
+    ensure_usuarios_internos,
+    reset_transportadora_password,
+    reset_user_password,
+    seed_all,
+    senha_padrao,
+)
 from src.theme import BRAND_RED, chart_colors
 
 
@@ -660,10 +667,18 @@ def render_gerenciar_senhas() -> None:
         opcoes = {f"{u['transportadora']} ({u['username']})": u for u in usuarios}
         escolha_label = st.selectbox("Transportadora", list(opcoes.keys()), key="reset_senha_transp_sel")
         usuario_selecionado = opcoes[escolha_label]
-        if st.button("Gerar nova senha", key="reset_senha_transp_botao"):
-            nova_senha = reset_transportadora_password(usuario_selecionado["username"])
-            st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
-            st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+        col_padrao, col_nova = st.columns(2)
+        with col_padrao:
+            if st.button("Ver senha padrão", key="ver_senha_padrao_transp_botao"):
+                st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao(usuario_selecionado['username'])}`")
+        with col_nova:
+            if st.button("Gerar nova senha", key="reset_senha_transp_botao"):
+                nova_senha = reset_transportadora_password(usuario_selecionado["username"])
+                st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
+        st.caption(
+            "\"Ver senha padrão\" só calcula (não altera nada). \"Gerar nova senha\" troca de "
+            "verdade — se o banco for zerado num redeploy, a conta volta com a senha padrão."
+        )
 
         st.caption("E-mail cadastrado (usado para a transportadora trocar a própria senha).")
         novo_email = st.text_input(
@@ -690,7 +705,9 @@ def render_gerenciar_acessos_internos() -> None:
     with st.sidebar.expander("Gerenciar acessos internos"):
         st.caption(
             "Contas de uso interno (não-transportadora): admin pleno ou "
-            "visualização completa sem editar justificativas nem gerenciar senhas."
+            "visualização completa sem editar justificativas nem gerenciar senhas. "
+            "Essas contas já são recriadas sozinhas a cada boot do app (senha padrão "
+            "determinística) — o botão abaixo é só um atalho manual, se quiser forçar."
         )
         if st.button("Criar contas padrão da lista", key="seed_internos_botao"):
             novos = ensure_usuarios_internos()
@@ -708,10 +725,18 @@ def render_gerenciar_acessos_internos() -> None:
             opcoes = {f"{u['username']} ({u['role']})": u for u in usuarios}
             escolha_label = st.selectbox("Conta", list(opcoes.keys()), key="reset_senha_interno_sel")
             usuario_selecionado = opcoes[escolha_label]
-            if st.button("Gerar nova senha", key="reset_senha_interno_botao"):
-                nova_senha = reset_user_password(usuario_selecionado["username"])
-                st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
-                st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+            col_padrao, col_nova = st.columns(2)
+            with col_padrao:
+                if st.button("Ver senha padrão", key="ver_senha_padrao_interno_botao"):
+                    st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao(usuario_selecionado['username'])}`")
+            with col_nova:
+                if st.button("Gerar nova senha", key="reset_senha_interno_botao"):
+                    nova_senha = reset_user_password(usuario_selecionado["username"])
+                    st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
+            st.caption(
+                "\"Ver senha padrão\" só calcula (não altera nada). \"Gerar nova senha\" troca de "
+                "verdade — se o banco for zerado num redeploy, a conta volta com a senha padrão."
+            )
 
             novo_email = st.text_input(
                 "E-mail", value=usuario_selecionado["email"], key=f"email_interno_{usuario_selecionado['username']}"
