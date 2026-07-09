@@ -14,7 +14,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 def get_user(username: str) -> dict | None:
     conn = get_connection()
     row = conn.execute(
-        "SELECT id, username, password_hash, role, transportadora, email FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, role, transportadora, email, deve_trocar_senha "
+        "FROM users WHERE username = ?",
         (username,),
     ).fetchone()
     conn.close()
@@ -27,6 +28,7 @@ def get_user(username: str) -> dict | None:
         "role": row[3],
         "transportadora": row[4],
         "email": row[5],
+        "deve_trocar_senha": bool(row[6]),
     }
 
 
@@ -38,12 +40,18 @@ def authenticate(username: str, password: str) -> dict | None:
 
 
 def create_user(
-    username: str, password: str, role: str, transportadora: str | None = None, email: str | None = None
+    username: str,
+    password: str,
+    role: str,
+    transportadora: str | None = None,
+    email: str | None = None,
+    deve_trocar_senha: bool = False,
 ) -> None:
     conn = get_connection()
     conn.execute(
-        "INSERT INTO users (username, password_hash, role, transportadora, email) VALUES (?, ?, ?, ?, ?)",
-        (username, hash_password(password), role, transportadora, email),
+        "INSERT INTO users (username, password_hash, role, transportadora, email, deve_trocar_senha) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (username, hash_password(password), role, transportadora, email, 1 if deve_trocar_senha else 0),
     )
     conn.commit()
     conn.close()
@@ -90,12 +98,18 @@ def list_internal_users() -> list[dict]:
     return [{"username": r[0], "role": r[1], "email": r[2] or ""} for r in rows]
 
 
-def set_password(username: str, new_password: str) -> None:
+def set_password(username: str, new_password: str, deve_trocar_senha: bool | None = None) -> None:
     conn = get_connection()
-    conn.execute(
-        "UPDATE users SET password_hash = ? WHERE username = ?",
-        (hash_password(new_password), username),
-    )
+    if deve_trocar_senha is None:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (hash_password(new_password), username),
+        )
+    else:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, deve_trocar_senha = ? WHERE username = ?",
+            (hash_password(new_password), 1 if deve_trocar_senha else 0, username),
+        )
     conn.commit()
     conn.close()
 

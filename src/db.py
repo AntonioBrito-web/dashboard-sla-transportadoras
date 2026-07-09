@@ -60,6 +60,7 @@ def init_db() -> None:
             role TEXT NOT NULL CHECK(role IN ('admin', 'transportadora', 'interno')),
             transportadora TEXT,
             email TEXT,
+            deve_trocar_senha INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """
@@ -68,6 +69,8 @@ def init_db() -> None:
     colunas_users = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     if "email" not in colunas_users:
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "deve_trocar_senha" not in colunas_users:
+        conn.execute("ALTER TABLE users ADD COLUMN deve_trocar_senha INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS justificativas (

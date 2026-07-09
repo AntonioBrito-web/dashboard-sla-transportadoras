@@ -15,6 +15,7 @@ from src.auth import (
 )
 from src.data import load_transportadoras, load_transportadoras_com_abreviatura
 from src.db import renomear_username
+from src.email_util import enviar_email
 
 ROOT = Path(__file__).resolve().parent.parent
 ADMIN_CRED_FILE = ROOT / "admin_credentials.txt"
@@ -162,7 +163,7 @@ def ensure_transportadora_accounts() -> list[dict]:
         usernames.add(slug)
 
         senha = senha_padrao(slug)
-        create_user(slug, senha, "transportadora", transportadora=nome)
+        create_user(slug, senha, "transportadora", transportadora=nome, deve_trocar_senha=True)
         novos_registros.append({"transportadora": nome, "usuario": slug, "senha": senha})
         print(f"[seed] Conta transportadora criada. usuario={slug} senha={senha} transportadora={nome}", flush=True)
 
@@ -193,7 +194,7 @@ def ensure_usuarios_internos() -> list[dict]:
         if username in usernames_existentes:
             continue  # já semeado numa rodada anterior
         senha = senha_padrao(username)
-        create_user(username, senha, role, transportadora=None)
+        create_user(username, senha, role, transportadora=None, deve_trocar_senha=True)
         usernames_existentes.add(username)
         novos.append({"nome": nome, "usuario": username, "senha": senha, "role": role})
         print(f"[seed] Conta interna criada. usuario={username} role={role} nome={nome}", flush=True)
@@ -223,14 +224,14 @@ def criar_acesso_interno(nome: str, role: str, email: str = "") -> dict:
         i += 1
         username = f"{base}{i}"
     senha = gen_password(10)
-    create_user(username, senha, role, transportadora=None, email=email.strip() or None)
+    create_user(username, senha, role, transportadora=None, email=email.strip() or None, deve_trocar_senha=True)
     print(f"[seed] Conta interna criada (cadastro avulso). usuario={username} role={role} nome={nome}", flush=True)
     return {"nome": nome, "usuario": username, "senha": senha, "role": role}
 
 
 def reset_user_password(username: str) -> str:
     nova_senha = gen_password(10)
-    set_password(username, nova_senha)
+    set_password(username, nova_senha, deve_trocar_senha=True)
     print(f"[seed] Senha redefinida. usuario={username} senha={nova_senha}", flush=True)
     return nova_senha
 
@@ -268,8 +269,45 @@ def padronizar_usernames_transportadora() -> int:
     return renomeados
 
 
+def notificar_contas_recriadas(novas_transportadoras: list[dict], novos_internos: list[dict]) -> bool:
+    # Manda UM e-mail consolidado pra um endereço fixo (NOTIFY_EMAIL nos
+    # Secrets), em vez de um e-mail por pessoa: os e-mails individuais
+    # ficam guardados no mesmo SQLite que é zerado no wipe, então depois
+    # de um wipe não sobra pra quem mandar aviso individual mesmo. O admin
+    # (usuario "admin") não entra nessa lista — tem o fluxo próprio via
+    # RESET_ADMIN e não precisa de e-mail cadastrado.
+    todos = list(novas_transportadoras) + list(novos_internos)
+    if not todos:
+        return False
+
+    try:
+        import streamlit as st
+
+        destino = str(st.secrets.get("NOTIFY_EMAIL", "")).strip()
+    except Exception:
+        destino = ""
+    if not destino:
+        print("[email] NOTIFY_EMAIL não configurado — pulando aviso de contas recriadas.", flush=True)
+        return False
+
+    linhas = [
+        f"- {item.get('transportadora') or item.get('nome') or item['usuario']} "
+        f"— usuário: {item['usuario']} — senha: {item['senha']}"
+        for item in todos
+    ]
+    corpo = (
+        "O banco de contas do Dashboard SLA Transportadoras foi recriado "
+        "(provavelmente um redeploy/reboot no Streamlit Cloud zerou o disco).\n\n"
+        f"{len(todos)} conta(s) foram recriadas com a senha padrão de sempre:\n\n"
+        + "\n".join(linhas)
+        + "\n\nCada usuário será obrigado a trocar a senha no próximo login."
+    )
+    return enviar_email(destino, f"[Dashboard SLA] {len(todos)} conta(s) recriada(s) após reboot", corpo)
+
+
 def seed_all() -> str | None:
     senha_admin_criada = ensure_admin()
-    ensure_transportadora_accounts()
-    ensure_usuarios_internos()
+    novas_transportadoras = ensure_transportadora_accounts()
+    novos_internos = ensure_usuarios_internos()
+    notificar_contas_recriadas(novas_transportadoras, novos_internos)
     return senha_admin_criada

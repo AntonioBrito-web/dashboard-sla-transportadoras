@@ -250,6 +250,56 @@ def login_screen() -> None:
                     st.error("Usuário ou senha inválidos.")
 
 
+def trocar_senha_obrigatoria_screen(user: dict) -> None:
+    # Conta criada/recriada pelo seed usa uma senha padrão previsível
+    # (mesma fórmula pra todo mundo) — por segurança, força a troca antes
+    # de liberar o dashboard. Não se aplica ao usuário "admin" (nunca tem
+    # essa flag marcada, ver src/seed.py).
+    st.markdown(
+        """<style>
+        .st-key-login-wrap {
+            min-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+    with st.container(key="login-wrap"):
+        _, col_centro, _ = st.columns([1, 1.4, 1])
+        with col_centro:
+            if LOGO_PATH.exists():
+                _, col_logo, _ = st.columns([1, 2, 1])
+                with col_logo:
+                    st.image(str(LOGO_PATH), width="stretch")
+            st.title("Defina uma nova senha")
+            st.info(
+                "Sua conta está usando a senha padrão temporária. Por segurança, "
+                "defina uma senha só sua antes de continuar.",
+                icon="🔐",
+            )
+            with st.form("trocar_senha_obrigatoria_form"):
+                nova = st.text_input("Nova senha", type="password")
+                confirma = st.text_input("Confirmar nova senha", type="password")
+                submitted = st.form_submit_button("Definir senha e entrar", width="stretch")
+            if submitted:
+                if not nova or nova != confirma:
+                    st.error("As senhas não conferem.")
+                elif len(nova) < 6:
+                    st.error("A nova senha deve ter pelo menos 6 caracteres.")
+                else:
+                    set_password(user["username"], nova, deve_trocar_senha=False)
+                    novo_user = dict(user)
+                    novo_user["deve_trocar_senha"] = False
+                    st.session_state["user"] = novo_user
+                    st.success("Senha definida!")
+                    st.rerun()
+            if st.button("Sair", key="sair_troca_obrigatoria"):
+                del st.session_state["user"]
+                st.rerun()
+
+
 def render_kpis(df: pd.DataFrame) -> None:
     kpis = compute_kpis(df)
     cols = st.columns(5)
@@ -772,9 +822,22 @@ def render_alterar_senha(user: dict) -> None:
         email_cadastrado = (user.get("email") or "").strip().lower()
         if not email_cadastrado:
             st.caption(
-                "Nenhum e-mail cadastrado nesta conta ainda — peça ao admin para "
-                "cadastrar um e-mail antes de trocar a senha por aqui."
+                "Nenhum e-mail cadastrado nesta conta ainda. Cadastre um e-mail — "
+                "ele vira o padrão usado pra confirmar trocas de senha por aqui."
             )
+            novo_email_cadastro = st.text_input("Seu e-mail", key="cadastro_email_input")
+            senha_atual_cadastro = st.text_input(
+                "Senha atual (confirma que é você)", type="password", key="cadastro_email_senha"
+            )
+            if st.button("Cadastrar e-mail", key="cadastro_email_botao"):
+                if "@" not in novo_email_cadastro or "." not in novo_email_cadastro:
+                    st.error("Informe um e-mail válido.")
+                elif not verify_password(senha_atual_cadastro, user["password_hash"]):
+                    st.error("Senha atual incorreta.")
+                else:
+                    set_email(user["username"], novo_email_cadastro)
+                    st.success("E-mail cadastrado! Abra este menu de novo para trocar a senha.")
+                    st.rerun()
             return
         st.caption("Por segurança, confirme o e-mail cadastrado nesta conta.")
         email_confirma = st.text_input("E-mail cadastrado", key="chsenha_email")
@@ -791,7 +854,7 @@ def render_alterar_senha(user: dict) -> None:
             elif len(nova) < 6:
                 st.error("Nova senha deve ter pelo menos 6 caracteres.")
             else:
-                set_password(user["username"], nova)
+                set_password(user["username"], nova, deve_trocar_senha=False)
                 st.success("Senha alterada com sucesso! Use a nova senha no próximo login.")
 
 
@@ -874,7 +937,11 @@ def main() -> None:
     if "user" not in st.session_state:
         login_screen()
     else:
-        dashboard_screen(st.session_state["user"])
+        user = st.session_state["user"]
+        if user.get("deve_trocar_senha"):
+            trocar_senha_obrigatoria_screen(user)
+        else:
+            dashboard_screen(user)
 
 
 if __name__ == "__main__":
