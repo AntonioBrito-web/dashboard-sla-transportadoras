@@ -21,8 +21,8 @@ def _config() -> tuple[str, str]:
     try:
         import streamlit as st
 
-        database = str(st.secrets.get("TURSO_DATABASE_URL", "")).strip()
-        auth_token = str(st.secrets.get("TURSO_AUTH_TOKEN", "")).strip()
+        database = str(st.secrets.get("TURSO_DATABASE_URL", "")).strip().strip("'\"")
+        auth_token = str(st.secrets.get("TURSO_AUTH_TOKEN", "")).strip().strip("'\"")
     except Exception as e:
         raise RuntimeError(f"Falha ao ler configuração do Turso: {e}") from e
     if not database or not auth_token:
@@ -31,7 +31,14 @@ def _config() -> tuple[str, str]:
             "Streamlit Cloud. Sem isso, justificativas e anexos não têm onde ser "
             "salvos de forma persistente — configure antes de usar o sistema."
         )
-    url = database.replace("libsql://", "https://", 1).rstrip("/") + "/v2/pipeline"
+    # Normaliza pra https://, aceitando o valor vir como libsql://, https://
+    # ou só o hostname puro (sem esquema) — e evita barra dupla antes do
+    # /v2/pipeline não importa como o secret foi colado.
+    if database.startswith("libsql://"):
+        database = "https://" + database[len("libsql://") :]
+    elif not database.startswith("https://") and not database.startswith("http://"):
+        database = "https://" + database
+    url = database.rstrip("/") + "/v2/pipeline"
     return url, auth_token
 
 
@@ -86,7 +93,11 @@ def _executar(sql: str, args: list | None = None) -> dict:
         data=json.dumps(payload),
         timeout=20,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(
+            f"HTTP {resp.status_code} do Turso ao chamar {url!r}. "
+            f"Corpo da resposta: {resp.text[:300]!r}"
+        )
     corpo = resp.json()
     primeiro = corpo["results"][0]
     if primeiro.get("type") == "error":
