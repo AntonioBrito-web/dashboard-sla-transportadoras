@@ -48,6 +48,43 @@ def init_justificativas_db() -> None:
         )
         """
     )
+    # E-mail cadastrado também mora aqui, não no SQLite local — senão some
+    # a cada wipe (recriação de conta) e o usuário é obrigado a recadastrar
+    # o e-mail toda vez que o disco local zera, mesmo já tendo cadastrado
+    # antes.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS emails_cadastrados (
+            username TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            atualizado_em TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_email(username: str) -> str:
+    conn = _get_connection()
+    row = conn.execute(
+        "SELECT email FROM emails_cadastrados WHERE username = ?", (username,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else ""
+
+
+def set_email(username: str, email: str) -> None:
+    email = email.strip()
+    conn = _get_connection()
+    if email:
+        conn.execute(
+            "INSERT INTO emails_cadastrados (username, email, atualizado_em) VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(username) DO UPDATE SET email = excluded.email, atualizado_em = excluded.atualizado_em",
+            (username, email),
+        )
+    else:
+        conn.execute("DELETE FROM emails_cadastrados WHERE username = ?", (username,))
     conn.commit()
     conn.close()
 
@@ -157,6 +194,17 @@ def reprovar_justificativa(chave_viagem: str, usuario: str) -> None:
         """,
         (usuario, chave_viagem),
     )
+    conn.commit()
+    conn.close()
+
+
+def excluir_justificativa(chave_viagem: str) -> None:
+    # Diferente de reprovar (que zera o conteúdo mas mantém a linha com
+    # status "reprovado"), isso apaga o registro inteiro — usado pra tirar
+    # de vez dados de teste/engano do banco, não faz parte do fluxo normal
+    # de aprovação.
+    conn = _get_connection()
+    conn.execute("DELETE FROM justificativas WHERE chave_viagem = ?", (chave_viagem,))
     conn.commit()
     conn.close()
 

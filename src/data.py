@@ -68,6 +68,8 @@ COL_STATUS_CHEGADA = "Status chegada"
 COL_MOTIVO_CHEGADA_DETALHE = "Motivo do atraso chegada (motivo menor)"
 COL_STATUS_TRANSIT = "Status transit time"
 COL_MOTIVO_TRANSIT = "Motivo do atraso transit time (motivo maior)"
+COL_RESPONSABILIDADE_CHEGADA = "Responsabilidade chegada"
+COL_RESPONSABILIDADE_TRANSIT = "Responsabilidade transit time"
 COL_KM = "Quilometragem"
 COL_VALOR_MULTA = "Valor da multa"
 COL_MES = "mês"
@@ -95,6 +97,15 @@ def eh_motivo_saida(motivo) -> bool:
         return False
     motivo_lower = str(motivo).lower()
     return "saída" in motivo_lower or "saida" in motivo_lower
+
+
+def _eh_responsabilidade_transportadora(serie: pd.Series) -> pd.Series:
+    # As colunas de responsabilidade (saída/chegada/transit) usam o mesmo
+    # padrão de texto "Transp 运输公司" / "Incontrolável 不可控因素" /
+    # "Operações 运营 SC/DC" (com pequenas variações de espaçamento na
+    # planilha) — checar só o prefixo "transp" cobre isso sem depender de
+    # bater a string inteira.
+    return serie.astype(str).str.strip().str.lower().str.startswith("transp")
 
 
 def fetch_saida_real_dataframe() -> pd.DataFrame:
@@ -174,6 +185,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[df[motivo_chegada_col].isna(), "motivo_atraso_chegada"] = pd.NA
     out["motivo_chegada_menor"] = _strip_cjk(df[COL_MOTIVO_CHEGADA_DETALHE]) if COL_MOTIVO_CHEGADA_DETALHE in df.columns else pd.NA
     out.loc[df[COL_MOTIVO_CHEGADA_DETALHE].isna(), "motivo_chegada_menor"] = pd.NA
+    out["responsabilidade_chegada"] = df.get(COL_RESPONSABILIDADE_CHEGADA)
 
     status_transit_raw = df.get(COL_STATUS_TRANSIT, pd.Series(dtype=str)).astype(str)
     out["no_prazo_transit"] = status_transit_raw.str.contains("No prazo", case=False, na=False)
@@ -181,6 +193,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out["motivo_transit"] = _strip_cjk(df[COL_MOTIVO_TRANSIT]) if COL_MOTIVO_TRANSIT in df.columns else pd.NA
     if COL_MOTIVO_TRANSIT in df.columns:
         out.loc[df[COL_MOTIVO_TRANSIT].isna(), "motivo_transit"] = pd.NA
+    out["responsabilidade_transit"] = df.get(COL_RESPONSABILIDADE_TRANSIT)
 
     out["km"] = _to_float_br(df[COL_KM]) if COL_KM in df.columns else pd.NA
     out["valor_multa"] = _to_float_br(df[COL_VALOR_MULTA]) if COL_VALOR_MULTA in df.columns else pd.NA
@@ -359,17 +372,23 @@ COLS_DETALHE_TRANSIT = {
 
 
 _CATEGORIAS_DETALHE = {
-    "saida": ("fora_prazo_saida", COLS_DETALHE_SAIDA),
-    "chegada": ("fora_prazo_chegada", COLS_DETALHE_CHEGADA),
-    "transit": ("fora_prazo_transit", COLS_DETALHE_TRANSIT),
+    "saida": ("fora_prazo_saida", COLS_DETALHE_SAIDA, None),
+    "chegada": ("fora_prazo_chegada", COLS_DETALHE_CHEGADA, "responsabilidade_chegada"),
+    "transit": ("fora_prazo_transit", COLS_DETALHE_TRANSIT, "responsabilidade_transit"),
 }
 
 
 def detalhe_categoria(df: pd.DataFrame, categoria: str) -> tuple[pd.DataFrame, dict]:
+    # As 3 tabelas de detalhe mostram só atrasos de responsabilidade da
+    # transportadora (colunas "Responsabilidade chegada"/"Responsabilidade
+    # transit time" da planilha, ou o equivalente vindo da aba Saída real
+    # pra saída) — atrasos de Operações/Incontrolável não entram aqui.
     if categoria == "saida":
         return detalhe_saida_real(df)
-    coluna_flag, colunas = _CATEGORIAS_DETALHE[categoria]
+    coluna_flag, colunas, coluna_responsabilidade = _CATEGORIAS_DETALHE[categoria]
     filtrado = df[df[coluna_flag]].copy()
+    if coluna_responsabilidade:
+        filtrado = filtrado[_eh_responsabilidade_transportadora(filtrado[coluna_responsabilidade])]
     campos = list(colunas.keys())
     detalhe = filtrado[["chave_viagem", "transportadora"] + campos].rename(columns=colunas)
     return detalhe.sort_values("Data", ascending=False), colunas
@@ -422,7 +441,12 @@ def detalhe_saida_real(df_escopo: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     chave_lookup = chave_lookup[~chave_lookup.index.duplicated(keep="first")]
     dentro_do_escopo = chave_id_secao.isin(chave_lookup.index)
 
-    mascara = fora_prazo & dentro_do_escopo
+    responsabilidade_transportadora = (
+        _eh_responsabilidade_transportadora(bruto["Responsabilidade"])
+        if "Responsabilidade" in bruto.columns
+        else pd.Series(False, index=bruto.index)
+    )
+    mascara = fora_prazo & dentro_do_escopo & responsabilidade_transportadora
 
     out = pd.DataFrame()
     out["transportadora"] = transportadora

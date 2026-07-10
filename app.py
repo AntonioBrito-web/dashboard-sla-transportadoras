@@ -8,7 +8,6 @@ from src.auth import (
     authenticate,
     list_internal_users,
     list_transportadora_users,
-    set_email,
     set_password,
     verify_password,
 )
@@ -27,12 +26,15 @@ from src.db import CATEGORIAS_APROVACAO, get_meta, init_db, set_meta
 from src.turso_db import (
     aprovar_justificativa,
     chaves_reprovadas,
+    excluir_justificativa,
     get_anexo,
+    get_email,
     get_justificativas,
     init_justificativas_db,
     reprovar_justificativa,
     salvar_justificativa_anexo,
     salvar_justificativa_texto,
+    set_email,
 )
 from src.seed import (
     criar_acesso_interno,
@@ -147,6 +149,28 @@ aplicar_padronizacao_usernames()
 verificar_reset_admin()
 TURSO_DISPONIVEL = _preparar_turso()
 
+
+def email_atual(username: str) -> str:
+    # O e-mail cadastrado mora só no Turso agora (persistente) — a coluna
+    # email da tabela users local não é mais usada pra isso, porque some a
+    # cada wipe do disco efêmero junto com a conta recriada.
+    if not TURSO_DISPONIVEL:
+        return ""
+    try:
+        return get_email(username)
+    except Exception:
+        return ""
+
+
+def definir_email(username: str, email: str) -> bool:
+    if not TURSO_DISPONIVEL:
+        return False
+    try:
+        set_email(username, email)
+        return True
+    except Exception:
+        return False
+
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
 MASCOTE_PATH = ASSETS_DIR / "mao mao.png"
@@ -258,6 +282,7 @@ def login_screen() -> None:
             if submitted:
                 user = authenticate(username.strip(), password)
                 if user:
+                    user["email"] = email_atual(user["username"])
                     st.session_state["user"] = user
                     st.rerun()
                 else:
@@ -289,38 +314,52 @@ def trocar_senha_obrigatoria_screen(user: dict) -> None:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Defina uma nova senha")
             email_cadastrado = (user.get("email") or "").strip()
+            # Só pede e-mail se realmente não tiver um cadastrado E o Turso
+            # estiver disponível pra salvar — não faz sentido travar o
+            # acesso pedindo e-mail se não há como persistir agora.
+            pedir_email = not email_cadastrado and TURSO_DISPONIVEL
             if email_cadastrado:
                 st.info(
                     "Sua conta está usando a senha padrão temporária. Por segurança, "
                     "defina uma senha só sua antes de continuar.",
                     icon="🔐",
                 )
-            else:
+            elif pedir_email:
                 st.info(
                     "Sua conta está usando a senha padrão temporária e ainda não tem "
                     "e-mail cadastrado. Cadastre seu e-mail e defina uma senha só sua "
                     "antes de continuar.",
                     icon="🔐",
                 )
+            else:
+                st.info(
+                    "Sua conta está usando a senha padrão temporária. Por segurança, "
+                    "defina uma senha só sua antes de continuar.",
+                    icon="🔐",
+                )
             with st.form("trocar_senha_obrigatoria_form"):
-                novo_email = "" if email_cadastrado else st.text_input("Seu e-mail")
+                novo_email = st.text_input("Seu e-mail") if pedir_email else ""
                 nova = st.text_input("Nova senha", type="password")
                 confirma = st.text_input("Confirmar nova senha", type="password")
                 submitted = st.form_submit_button("Definir senha e entrar", width="stretch")
             if submitted:
-                if not email_cadastrado and ("@" not in novo_email or "." not in novo_email):
+                if pedir_email and ("@" not in novo_email or "." not in novo_email):
                     st.error("Informe um e-mail válido.")
                 elif not nova or nova != confirma:
                     st.error("As senhas não conferem.")
                 elif len(nova) < 6:
                     st.error("A nova senha deve ter pelo menos 6 caracteres.")
                 else:
-                    if not email_cadastrado:
-                        set_email(user["username"], novo_email)
+                    if pedir_email and not definir_email(user["username"], novo_email):
+                        st.warning(
+                            "Não foi possível salvar o e-mail agora — tente de novo depois "
+                            "em \"Alterar minha senha\" na lateral.",
+                            icon="⚠️",
+                        )
                     set_password(user["username"], nova, deve_trocar_senha=False)
                     novo_user = dict(user)
                     novo_user["deve_trocar_senha"] = False
-                    novo_user["email"] = email_cadastrado or novo_email
+                    novo_user["email"] = email_cadastrado or (novo_email if pedir_email else "")
                     st.session_state["user"] = novo_user
                     st.success("Senha definida!")
                     st.rerun()
@@ -541,7 +580,7 @@ def render_tabela_detalhe(
             config_colunas[col_datahora] = st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
     if pode_aprovar:
         config_colunas["Decisão"] = st.column_config.SelectboxColumn(
-            options=["Pendente", "Aprovado", "Reprovado"]
+            options=["Pendente", "Aprovado", "Reprovado", "Excluir"]
         )
 
     editado = st.data_editor(
@@ -651,8 +690,11 @@ def render_tabela_detalhe(
                 st.rerun()
             elif decisao_nova == "Aprovado":
                 st.session_state[f"aprovando_{chave_id}"] = True
+            elif decisao_nova == "Excluir":
+                st.session_state[f"excluindo_{chave_id}"] = True
             elif decisao_nova == "Pendente":
                 st.session_state.pop(f"aprovando_{chave_id}", None)
+                st.session_state.pop(f"excluindo_{chave_id}", None)
 
         pendentes_categoria = [
             idx for idx in detalhe.index
@@ -673,8 +715,32 @@ def render_tabela_detalhe(
                 st.success("Justificativa aprovada.", icon="✅")
                 st.rerun()
 
+        excluindo_categoria = [
+            idx for idx in detalhe.index
+            if st.session_state.get(f"excluindo_{detalhe.loc[idx, 'chave_viagem'].replace('|', '_').replace('/', '-')}")
+        ]
+        for idx in excluindo_categoria:
+            chave = detalhe.loc[idx, "chave_viagem"]
+            chave_id = chave.replace("|", "_").replace("/", "-")
+            st.error(
+                f"Excluir de vez a justificativa/anexo de {detalhe.loc[idx, 'ID Viagem']}? "
+                "Isso não pode ser desfeito.",
+                icon="🗑️",
+            )
+            col_confirma, col_cancela = st.columns(2)
+            if col_confirma.button("Confirmar exclusão", key=f"excluir_confirma_{key_sufixo}_{chave_id}"):
+                excluir_justificativa(chave)
+                st.session_state.pop(f"excluindo_{chave_id}", None)
+                st.success("Registro excluído.", icon="🗑️")
+                st.rerun()
+            if col_cancela.button("Cancelar", key=f"excluir_cancela_{key_sufixo}_{chave_id}"):
+                st.session_state.pop(f"excluindo_{chave_id}", None)
+                st.rerun()
+
 
 def render_notificacao_reprovacao(user: dict) -> None:
+    if not TURSO_DISPONIVEL:
+        return
     chaves = chaves_reprovadas(user["transportadora"])
     if chaves:
         st.error(
@@ -682,6 +748,41 @@ def render_notificacao_reprovacao(user: dict) -> None:
             "Refaça a justificativa e/ou o anexo nas tabelas abaixo para que a notificação suma.",
             icon="🚫",
         )
+
+
+CORTE_JUSTIFICATIVA = pd.Timestamp("2026-07-01")
+
+
+def resumo_justificativa(detalhe: pd.DataFrame) -> dict:
+    # Viagens anteriores a 01/07/2026 contam como já justificadas
+    # (independente de terem justificativa escrita ou não) — só a partir
+    # dessa data que a pendência de fato é cobrada.
+    if detalhe.empty:
+        return {"total": 0, "justificado": 0, "pendente": 0}
+    chaves = detalhe["chave_viagem"].tolist()
+    justificativas = get_justificativas(chaves) if TURSO_DISPONIVEL else {}
+    tem_justificativa = detalhe["chave_viagem"].map(
+        lambda k: bool(justificativas.get(k, {}).get("justificativa", ""))
+    )
+    dentro_do_escopo = detalhe["Data"] >= CORTE_JUSTIFICATIVA
+    pendente = int((dentro_do_escopo & ~tem_justificativa).sum())
+    total = len(detalhe)
+    return {"total": total, "justificado": total - pendente, "pendente": pendente}
+
+
+def render_resumo_justificativas(resumos: dict) -> None:
+    st.markdown("###### Justificativas de atraso (a partir de 01/07/2026)")
+    cols = st.columns(3)
+    titulos = {"saida": "Saída", "chegada": "Chegada", "transit": "Transit time"}
+    for col, categoria in zip(cols, ["saida", "chegada", "transit"]):
+        info = resumos[categoria]
+        with col:
+            st.caption(titulos[categoria])
+            sub1, sub2, sub3 = st.columns(3)
+            sub1.metric("Total", milhar_str(info["total"]))
+            sub2.metric("Justificado", milhar_str(info["justificado"]))
+            sub3.metric("Pendente", milhar_str(info["pendente"]))
+    st.divider()
 
 
 def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
@@ -693,6 +794,14 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     detalhe_saida, colunas_saida = detalhe_categoria(df, "saida")
     detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
     detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
+
+    render_resumo_justificativas(
+        {
+            "saida": resumo_justificativa(detalhe_saida),
+            "chegada": resumo_justificativa(detalhe_chegada),
+            "transit": resumo_justificativa(detalhe_transit),
+        }
+    )
 
     if user["role"] in ("admin", "interno"):
         # No admin/interno, as 3 viram abas clicáveis em vez de empilhadas —
@@ -768,12 +877,16 @@ def render_gerenciar_senhas() -> None:
 
         st.caption("E-mail cadastrado (usado para a transportadora trocar a própria senha).")
         novo_email = st.text_input(
-            "E-mail", value=usuario_selecionado["email"], key=f"email_transp_{usuario_selecionado['username']}"
+            "E-mail",
+            value=email_atual(usuario_selecionado["username"]),
+            key=f"email_transp_{usuario_selecionado['username']}",
         )
         if st.button("Salvar e-mail", key="salvar_email_transp_botao"):
-            set_email(usuario_selecionado["username"], novo_email)
-            st.success("E-mail atualizado.")
-            st.rerun()
+            if definir_email(usuario_selecionado["username"], novo_email):
+                st.success("E-mail atualizado.")
+                st.rerun()
+            else:
+                st.error("Não foi possível salvar o e-mail agora (banco persistente indisponível).")
 
         st.divider()
         st.caption("Renomeia contas antigas para o padrão abreviatura_logistica (mantém a senha).")
@@ -825,12 +938,16 @@ def render_gerenciar_acessos_internos() -> None:
             )
 
             novo_email = st.text_input(
-                "E-mail", value=usuario_selecionado["email"], key=f"email_interno_{usuario_selecionado['username']}"
+                "E-mail",
+                value=email_atual(usuario_selecionado["username"]),
+                key=f"email_interno_{usuario_selecionado['username']}",
             )
             if st.button("Salvar e-mail", key="salvar_email_interno_botao"):
-                set_email(usuario_selecionado["username"], novo_email)
-                st.success("E-mail atualizado.")
-                st.rerun()
+                if definir_email(usuario_selecionado["username"], novo_email):
+                    st.success("E-mail atualizado.")
+                    st.rerun()
+                else:
+                    st.error("Não foi possível salvar o e-mail agora (banco persistente indisponível).")
 
         st.divider()
         st.caption("Cadastro avulso de um novo acesso interno.")
@@ -847,6 +964,8 @@ def render_gerenciar_acessos_internos() -> None:
             else:
                 role = "admin" if role_novo.startswith("Admin") else "interno"
                 registro = criar_acesso_interno(nome_novo.strip(), role, email_novo)
+                if email_novo.strip():
+                    definir_email(registro["usuario"], email_novo)
                 st.success(
                     f"Conta criada — usuário: `{registro['usuario']}` — senha: `{registro['senha']}`"
                 )
@@ -857,6 +976,12 @@ def render_alterar_senha(user: dict) -> None:
     with st.sidebar.expander("Alterar minha senha"):
         email_cadastrado = (user.get("email") or "").strip().lower()
         if not email_cadastrado:
+            if not TURSO_DISPONIVEL:
+                st.caption(
+                    "Cadastro de e-mail indisponível no momento (banco persistente fora "
+                    "do ar) — tente novamente mais tarde."
+                )
+                return
             st.caption(
                 "Nenhum e-mail cadastrado nesta conta ainda. Cadastre um e-mail — "
                 "ele vira o padrão usado pra confirmar trocas de senha por aqui."
@@ -870,8 +995,9 @@ def render_alterar_senha(user: dict) -> None:
                     st.error("Informe um e-mail válido.")
                 elif not verify_password(senha_atual_cadastro, user["password_hash"]):
                     st.error("Senha atual incorreta.")
+                elif not definir_email(user["username"], novo_email_cadastro):
+                    st.error("Não foi possível salvar o e-mail agora. Tente de novo.")
                 else:
-                    set_email(user["username"], novo_email_cadastro)
                     st.success("E-mail cadastrado! Abra este menu de novo para trocar a senha.")
                     st.rerun()
             return
