@@ -275,24 +275,39 @@ def trocar_senha_obrigatoria_screen(user: dict) -> None:
                 with col_logo:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Defina uma nova senha")
-            st.info(
-                "Sua conta está usando a senha padrão temporária. Por segurança, "
-                "defina uma senha só sua antes de continuar.",
-                icon="🔐",
-            )
+            email_cadastrado = (user.get("email") or "").strip()
+            if email_cadastrado:
+                st.info(
+                    "Sua conta está usando a senha padrão temporária. Por segurança, "
+                    "defina uma senha só sua antes de continuar.",
+                    icon="🔐",
+                )
+            else:
+                st.info(
+                    "Sua conta está usando a senha padrão temporária e ainda não tem "
+                    "e-mail cadastrado. Cadastre seu e-mail e defina uma senha só sua "
+                    "antes de continuar.",
+                    icon="🔐",
+                )
             with st.form("trocar_senha_obrigatoria_form"):
+                novo_email = "" if email_cadastrado else st.text_input("Seu e-mail")
                 nova = st.text_input("Nova senha", type="password")
                 confirma = st.text_input("Confirmar nova senha", type="password")
                 submitted = st.form_submit_button("Definir senha e entrar", width="stretch")
             if submitted:
-                if not nova or nova != confirma:
+                if not email_cadastrado and ("@" not in novo_email or "." not in novo_email):
+                    st.error("Informe um e-mail válido.")
+                elif not nova or nova != confirma:
                     st.error("As senhas não conferem.")
                 elif len(nova) < 6:
                     st.error("A nova senha deve ter pelo menos 6 caracteres.")
                 else:
+                    if not email_cadastrado:
+                        set_email(user["username"], novo_email)
                     set_password(user["username"], nova, deve_trocar_senha=False)
                     novo_user = dict(user)
                     novo_user["deve_trocar_senha"] = False
+                    novo_user["email"] = email_cadastrado or novo_email
                     st.session_state["user"] = novo_user
                     st.success("Senha definida!")
                     st.rerun()
