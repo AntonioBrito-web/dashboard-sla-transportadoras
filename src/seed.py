@@ -12,10 +12,10 @@ from src.auth import (
     existing_transportadoras,
     existing_usernames,
     list_transportadora_users,
+    renomear_username,
     set_password,
 )
 from src.data import load_transportadoras, load_transportadoras_com_abreviatura
-from src.db import renomear_username
 from src.email_util import enviar_email
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -288,11 +288,12 @@ def padronizar_usernames_transportadora() -> int:
 
 def notificar_contas_recriadas(novas_transportadoras: list[dict], novos_internos: list[dict]) -> bool:
     # Manda UM e-mail consolidado pra um endereço fixo (NOTIFY_EMAIL nos
-    # Secrets), em vez de um e-mail por pessoa: os e-mails individuais
-    # ficam guardados no mesmo SQLite que é zerado no wipe, então depois
-    # de um wipe não sobra pra quem mandar aviso individual mesmo. O admin
-    # (usuario "admin") não entra nessa lista — tem o fluxo próprio via
-    # RESET_ADMIN e não precisa de e-mail cadastrado.
+    # Secrets), em vez de um e-mail por pessoa. Usuários/senhas agora
+    # persistem no Turso, então isso só dispara quando uma conta é
+    # realmente nova (primeiro boot) ou, no caso raro de perda de dados no
+    # Turso, quando ela precisa ser recriada do zero — não mais em todo
+    # reboot como antes. O admin (usuario "admin") não entra nessa lista —
+    # tem o fluxo próprio via RESET_ADMIN e não precisa de e-mail cadastrado.
     todos = list(novas_transportadoras) + list(novos_internos)
     if not todos:
         return False

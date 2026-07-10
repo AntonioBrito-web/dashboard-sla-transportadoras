@@ -126,36 +126,113 @@ def init_justificativas_db() -> None:
         )
         """
     )
-    # E-mail cadastrado também mora aqui, não no SQLite local — senão some
-    # a cada wipe (recriação de conta) e o usuário é obrigado a recadastrar
-    # o e-mail toda vez que o disco local zera, mesmo já tendo cadastrado
-    # antes.
+
+
+def init_usuarios_db() -> None:
+    # Contas de login (admin/transportadora/interno) também vivem aqui, não
+    # mais no SQLite local — é isso que garante que a senha (e o e-mail)
+    # sobrevivem a um reboot/redeploy: a conta só é recriada com a senha
+    # padrão se realmente não existir ainda, nunca por já existir e o disco
+    # local ter zerado.
     _executar(
         """
-        CREATE TABLE IF NOT EXISTS emails_cadastrados (
+        CREATE TABLE IF NOT EXISTS usuarios (
             username TEXT PRIMARY KEY,
-            email TEXT NOT NULL,
-            atualizado_em TEXT DEFAULT (datetime('now'))
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            transportadora TEXT,
+            email TEXT,
+            deve_trocar_senha INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """
     )
 
 
+def get_usuario(username: str) -> dict | None:
+    resultado = _executar(
+        "SELECT username, password_hash, role, transportadora, email, deve_trocar_senha "
+        "FROM usuarios WHERE username = ?",
+        [username],
+    )
+    if not resultado["linhas"]:
+        return None
+    r = resultado["linhas"][0]
+    return {
+        "username": r[0],
+        "password_hash": r[1],
+        "role": r[2],
+        "transportadora": r[3],
+        "email": r[4] or "",
+        "deve_trocar_senha": bool(r[5]),
+    }
+
+
+def criar_usuario(
+    username: str,
+    password_hash: str,
+    role: str,
+    transportadora: str | None = None,
+    email: str | None = None,
+    deve_trocar_senha: bool = False,
+) -> None:
+    _executar(
+        "INSERT INTO usuarios (username, password_hash, role, transportadora, email, deve_trocar_senha) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [username, password_hash, role, transportadora, email, 1 if deve_trocar_senha else 0],
+    )
+
+
+def atualizar_senha_usuario(username: str, password_hash: str, deve_trocar_senha: bool | None = None) -> None:
+    if deve_trocar_senha is None:
+        _executar("UPDATE usuarios SET password_hash = ? WHERE username = ?", [password_hash, username])
+    else:
+        _executar(
+            "UPDATE usuarios SET password_hash = ?, deve_trocar_senha = ? WHERE username = ?",
+            [password_hash, 1 if deve_trocar_senha else 0, username],
+        )
+
+
+def usuarios_existentes() -> set[str]:
+    resultado = _executar("SELECT username FROM usuarios")
+    return {r[0] for r in resultado["linhas"]}
+
+
+def transportadoras_existentes() -> set[str]:
+    resultado = _executar("SELECT transportadora FROM usuarios WHERE role = 'transportadora'")
+    return {r[0] for r in resultado["linhas"] if r[0]}
+
+
+def admin_existe() -> bool:
+    resultado = _executar("SELECT 1 FROM usuarios WHERE role = 'admin' LIMIT 1")
+    return bool(resultado["linhas"])
+
+
+def listar_transportadora_usuarios() -> list[dict]:
+    resultado = _executar(
+        "SELECT username, transportadora, email FROM usuarios WHERE role = 'transportadora' ORDER BY transportadora"
+    )
+    return [{"username": r[0], "transportadora": r[1], "email": r[2] or ""} for r in resultado["linhas"]]
+
+
+def listar_usuarios_internos() -> list[dict]:
+    resultado = _executar(
+        "SELECT username, role, email FROM usuarios WHERE role IN ('admin', 'interno') ORDER BY role, username"
+    )
+    return [{"username": r[0], "role": r[1], "email": r[2] or ""} for r in resultado["linhas"]]
+
+
+def renomear_usuario(username_antigo: str, username_novo: str) -> None:
+    _executar("UPDATE usuarios SET username = ? WHERE username = ?", [username_novo, username_antigo])
+
+
 def get_email(username: str) -> str:
-    resultado = _executar("SELECT email FROM emails_cadastrados WHERE username = ?", [username])
-    return resultado["linhas"][0][0] if resultado["linhas"] else ""
+    resultado = _executar("SELECT email FROM usuarios WHERE username = ?", [username])
+    return resultado["linhas"][0][0] if resultado["linhas"] and resultado["linhas"][0][0] else ""
 
 
 def set_email(username: str, email: str) -> None:
-    email = email.strip()
-    if email:
-        _executar(
-            "INSERT INTO emails_cadastrados (username, email, atualizado_em) VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(username) DO UPDATE SET email = excluded.email, atualizado_em = excluded.atualizado_em",
-            [username, email],
-        )
-    else:
-        _executar("DELETE FROM emails_cadastrados WHERE username = ?", [username])
+    _executar("UPDATE usuarios SET email = ? WHERE username = ?", [email.strip(), username])
 
 
 def get_justificativas(chaves: list[str]) -> dict:

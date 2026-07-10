@@ -31,6 +31,7 @@ from src.turso_db import (
     get_email,
     get_justificativas,
     init_justificativas_db,
+    init_usuarios_db,
     reprovar_justificativa,
     salvar_justificativa_anexo,
     salvar_justificativa_texto,
@@ -66,10 +67,15 @@ def preparar_seed() -> str | None:
     # processo, uma migração de esquema nova (ex.: colunas de aprovação)
     # nunca chegaria a rodar num processo que já estava de pé antes do
     # deploy — foi exatamente isso que quebrou a tabela de justificativas.
-    # Retorna a senha do admin SE uma conta nova precisou ser criada agora
-    # (ex.: disco zerado num reboot) — assim ela aparece na tela de login
-    # em vez de sumir só no log, como aconteceu da primeira vez.
-    return seed_all()
+    # Usuários agora vivem no Turso (persistente) — se essa chamada falhar
+    # (Turso fora do ar), não pode derrubar o app inteiro: só significa que
+    # ninguém consegue logar até o banco voltar, o que já fica claro na
+    # tela de login via TURSO_DISPONIVEL.
+    try:
+        return seed_all()
+    except Exception as e:
+        print(f"[seed] Falha ao semear contas: {e}", flush=True)
+        return None
 
 
 def verificar_reset_admin() -> str | None:
@@ -129,25 +135,29 @@ def aplicar_padronizacao_usernames() -> None:
 
 @st.cache_resource(show_spinner=False)
 def _preparar_turso() -> bool:
-    # Justificativas/anexos vivem no Turso (externo, persistente) — ver
-    # src/turso_db.py. Se os secrets TURSO_DATABASE_URL/TURSO_AUTH_TOKEN
-    # ainda não estiverem configurados, o app continua no ar (login,
-    # dashboard, etc.), só a parte de justificativa/anexo fica bloqueada
-    # com uma mensagem clara em vez de estourar uma exceção feia.
+    # Usuários (login), justificativas e anexos vivem todos no Turso
+    # (externo, persistente) — ver src/turso_db.py. Isso precisa rodar
+    # ANTES de qualquer semeadura de conta (preparar_seed) ou tentativa de
+    # login: sem o Turso disponível, não tem onde guardar/ler usuário
+    # nenhum. Se os secrets TURSO_DATABASE_URL/TURSO_AUTH_TOKEN não
+    # estiverem configurados (ou o Turso estiver fora do ar), o app mostra
+    # uma mensagem clara na tela de login em vez de estourar uma exceção.
     try:
         init_justificativas_db()
-        print("[turso] Conectado com sucesso — justificativas/anexos disponíveis.", flush=True)
+        init_usuarios_db()
+        print("[turso] Conectado com sucesso — usuários/justificativas/anexos disponíveis.", flush=True)
         return True
     except Exception as e:
-        print(f"[turso] Justificativas/anexos indisponíveis: {e}", flush=True)
+        print(f"[turso] Turso indisponível: {e}", flush=True)
         return False
 
 
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
-preparar_seed()
-aplicar_padronizacao_usernames()
-verificar_reset_admin()
 TURSO_DISPONIVEL = _preparar_turso()
+if TURSO_DISPONIVEL:
+    preparar_seed()
+    aplicar_padronizacao_usernames()
+    verificar_reset_admin()
 
 
 def email_atual(username: str) -> str:
@@ -274,15 +284,25 @@ def login_screen() -> None:
                 with col_logo:
                     st.image(str(LOGO_PATH), width="stretch")
             st.title("Dashboard SLA Transportadoras")
+            if not TURSO_DISPONIVEL:
+                st.error(
+                    "Sistema temporariamente indisponível — não foi possível conectar ao "
+                    "banco de contas. Tente novamente em alguns instantes ou avise o admin.",
+                    icon="🚫",
+                )
+                return
             st.subheader("Login")
             with st.form("login_form"):
                 username = st.text_input("Usuário")
                 password = st.text_input("Senha", type="password")
                 submitted = st.form_submit_button("Entrar", width="stretch")
             if submitted:
-                user = authenticate(username.strip(), password)
+                try:
+                    user = authenticate(username.strip(), password)
+                except Exception as e:
+                    st.error(f"Falha ao verificar login: {e}")
+                    return
                 if user:
-                    user["email"] = email_atual(user["username"])
                     st.session_state["user"] = user
                     st.rerun()
                 else:
@@ -804,19 +824,12 @@ def resumo_justificativa(detalhe: pd.DataFrame) -> dict:
     return {"total": total, "justificado": total - pendente, "pendente": pendente}
 
 
-def render_resumo_justificativas(resumos: dict) -> None:
-    st.markdown("###### Justificativas de atraso (a partir de 01/07/2026)")
-    cols = st.columns(3)
-    titulos = {"saida": "Saída", "chegada": "Chegada", "transit": "Transit time"}
-    for col, categoria in zip(cols, ["saida", "chegada", "transit"]):
-        info = resumos[categoria]
-        with col:
-            st.caption(titulos[categoria])
-            sub1, sub2, sub3 = st.columns(3)
-            sub1.metric("Total", milhar_str(info["total"]))
-            sub2.metric("Justificado", milhar_str(info["justificado"]))
-            sub3.metric("Pendente", milhar_str(info["pendente"]))
-    st.divider()
+def render_resumo_categoria(detalhe: pd.DataFrame) -> None:
+    info = resumo_justificativa(detalhe)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total", milhar_str(info["total"]))
+    col2.metric("Justificado", milhar_str(info["justificado"]))
+    col3.metric("Pendente", milhar_str(info["pendente"]))
 
 
 def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
@@ -829,29 +842,33 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
     detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
 
-    render_resumo_justificativas(
-        {
-            "saida": resumo_justificativa(detalhe_saida),
-            "chegada": resumo_justificativa(detalhe_chegada),
-            "transit": resumo_justificativa(detalhe_transit),
-        }
-    )
+    st.markdown("###### DETALHAMENTO DE JUSTIFICATIVAS DE ATRASOS")
 
     if user["role"] in ("admin", "interno"):
         # No admin/interno, as 3 viram abas clicáveis em vez de empilhadas —
-        # menos rolagem pra achar a que interessa.
+        # menos rolagem pra achar a que interessa. O resumo (Total/
+        # Justificado/Pendente) fica dentro de cada aba, então mostra só os
+        # números da tabela que está selecionada no momento.
         aba_saida, aba_chegada, aba_transit = st.tabs(
             ["Detalhe Atraso Saída", "Detalhe Atraso Chegada", "Detalhe Atraso Transit time"]
         )
         with aba_saida:
+            render_resumo_categoria(detalhe_saida)
             render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida", mostrar_titulo=False)
         with aba_chegada:
+            render_resumo_categoria(detalhe_chegada)
             render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada", mostrar_titulo=False)
         with aba_transit:
+            render_resumo_categoria(detalhe_transit)
             render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit", mostrar_titulo=False)
     else:
+        # Transportadora vê as 3 tabelas empilhadas — o resumo fica logo
+        # acima de cada tabela respectiva, não um bloco único no topo.
+        render_resumo_categoria(detalhe_saida)
         render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
+        render_resumo_categoria(detalhe_chegada)
         render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
+        render_resumo_categoria(detalhe_transit)
         render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
 
 
@@ -889,7 +906,11 @@ def render_table(df: pd.DataFrame) -> None:
 
 def render_gerenciar_senhas() -> None:
     with st.sidebar.expander("Gerenciar senhas de transportadoras"):
-        usuarios = list_transportadora_users()
+        try:
+            usuarios = list_transportadora_users()
+        except Exception as e:
+            st.error(f"Falha ao carregar contas: {e}")
+            return
         if not usuarios:
             st.caption("Nenhuma conta de transportadora encontrada.")
             return
@@ -902,8 +923,12 @@ def render_gerenciar_senhas() -> None:
                 st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao(usuario_selecionado['username'])}`")
         with col_nova:
             if st.button("Gerar nova senha", key="reset_senha_transp_botao"):
-                nova_senha = reset_transportadora_password(usuario_selecionado["username"])
-                st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
+                try:
+                    nova_senha = reset_transportadora_password(usuario_selecionado["username"])
+                except Exception as e:
+                    st.error(f"Falha ao gerar nova senha: {e}")
+                else:
+                    st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
         st.caption(
             "\"Ver senha padrão\" só calcula (não altera nada). \"Gerar nova senha\" troca de "
             "verdade — se o banco for zerado num redeploy, a conta volta com a senha padrão."
@@ -939,11 +964,15 @@ def render_gerenciar_acessos_internos() -> None:
         st.caption(
             "Contas de uso interno (não-transportadora): admin pleno ou "
             "visualização completa sem editar justificativas nem gerenciar senhas. "
-            "Essas contas já são recriadas sozinhas a cada boot do app (senha padrão "
-            "determinística) — o botão abaixo é só um atalho manual, se quiser forçar."
+            "Essas contas são criadas uma única vez (senha padrão determinística) e "
+            "depois persistem — o botão abaixo só cria as que ainda faltarem."
         )
         if st.button("Criar contas padrão da lista", key="seed_internos_botao"):
-            novos = ensure_usuarios_internos()
+            try:
+                novos = ensure_usuarios_internos()
+            except Exception as e:
+                st.error(f"Falha ao criar contas: {e}")
+                novos = []
             if novos:
                 st.success(f"{len(novos)} conta(s) criada(s):")
                 for reg in novos:
@@ -953,7 +982,11 @@ def render_gerenciar_acessos_internos() -> None:
                 st.info("Todas as contas da lista padrão já existem.")
 
         st.divider()
-        usuarios = list_internal_users()
+        try:
+            usuarios = list_internal_users()
+        except Exception as e:
+            st.error(f"Falha ao carregar contas: {e}")
+            usuarios = []
         if usuarios:
             opcoes = {f"{u['username']} ({u['role']})": u for u in usuarios}
             escolha_label = st.selectbox("Conta", list(opcoes.keys()), key="reset_senha_interno_sel")
@@ -964,8 +997,12 @@ def render_gerenciar_acessos_internos() -> None:
                     st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao_legivel(usuario_selecionado['username'])}`")
             with col_nova:
                 if st.button("Gerar nova senha", key="reset_senha_interno_botao"):
-                    nova_senha = reset_user_password(usuario_selecionado["username"])
-                    st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
+                    try:
+                        nova_senha = reset_user_password(usuario_selecionado["username"])
+                    except Exception as e:
+                        st.error(f"Falha ao gerar nova senha: {e}")
+                    else:
+                        st.success(f"Nova senha para `{usuario_selecionado['username']}`: `{nova_senha}`")
             st.caption(
                 "\"Ver senha padrão\" só calcula (não altera nada). \"Gerar nova senha\" troca de "
                 "verdade — se o banco for zerado num redeploy, a conta volta com a senha padrão."
@@ -997,13 +1034,17 @@ def render_gerenciar_acessos_internos() -> None:
                 st.warning("Informe o nome completo.", icon="⚠️")
             else:
                 role = "admin" if role_novo.startswith("Admin") else "interno"
-                registro = criar_acesso_interno(nome_novo.strip(), role, email_novo)
-                if email_novo.strip():
-                    definir_email(registro["usuario"], email_novo)
-                st.success(
-                    f"Conta criada — usuário: `{registro['usuario']}` — senha: `{registro['senha']}`"
-                )
-                st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+                try:
+                    registro = criar_acesso_interno(nome_novo.strip(), role, email_novo)
+                except Exception as e:
+                    st.error(f"Falha ao criar acesso: {e}")
+                else:
+                    if email_novo.strip():
+                        definir_email(registro["usuario"], email_novo)
+                    st.success(
+                        f"Conta criada — usuário: `{registro['usuario']}` — senha: `{registro['senha']}`"
+                    )
+                    st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
 
 
 def render_alterar_senha(user: dict) -> None:
