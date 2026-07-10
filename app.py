@@ -134,6 +134,7 @@ def _preparar_turso() -> bool:
     # com uma mensagem clara em vez de estourar uma exceção feia.
     try:
         init_justificativas_db()
+        print("[turso] Conectado com sucesso — justificativas/anexos disponíveis.", flush=True)
         return True
     except Exception as e:
         print(f"[turso] Justificativas/anexos indisponíveis: {e}", flush=True)
