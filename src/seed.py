@@ -1,4 +1,5 @@
 import csv
+import datetime
 import hashlib
 import secrets
 import string
@@ -54,18 +55,24 @@ def gen_password(length: int = 10) -> str:
 
 
 def _segredo_senha() -> str:
-    # Lido do secret SEED_SECRET no Streamlit Cloud (Settings -> Secrets).
-    # Sugestão: usar uma data fixa no formato ddmmaaaa (ex.: "09072026").
-    # Fallback embutido garante que a semeadura automática continue
-    # funcionando mesmo antes do secret ser configurado — mas o segredo
-    # real só fica seguro depois de configurado nos Secrets (não commitado).
+    # Por padrão, o segredo é a própria data de hoje em ddmmaaaa — não
+    # precisa configurar nada manualmente nos Secrets: a cada dia em que
+    # uma conta é (re)criada pela primeira vez, ela já nasce com uma senha
+    # padrão diferente automaticamente. Como toda conta recém-criada é
+    # obrigada a trocar a senha no primeiro login (deve_trocar_senha) e o
+    # aviso por e-mail sempre informa a senha do dia, isso não trava
+    # ninguém — só evita ter que lembrar de atualizar um secret manual.
+    # Se o secret SEED_SECRET estiver definido nos Secrets do Streamlit
+    # Cloud, ele tem prioridade (permite fixar/travar um valor específico).
     try:
         import streamlit as st
 
         valor = str(st.secrets.get("SEED_SECRET", "")).strip()
     except Exception:
         valor = ""
-    return valor or "JTEXPRESS-SLA-PADRAO"
+    if valor:
+        return valor
+    return datetime.date.today().strftime("%d%m%Y")
 
 
 def senha_padrao(username: str, length: int = 10) -> str:
