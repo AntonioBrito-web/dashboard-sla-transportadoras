@@ -58,6 +58,29 @@ def formatar_data_br(valor) -> str:
     return valor.strftime("%d/%m/%Y") if pd.notna(valor) else ""
 
 
+def _campo_clicado(chave_widget: str, nome_selecao: str, campo: str) -> str | None:
+    # Lê o estado de um clique em gráfico (Altair, on_select="rerun") a
+    # partir do session_state — funciona porque o Streamlit já atualiza
+    # esse estado ANTES do script rodar de novo, então dá pra ler aqui,
+    # no topo do dashboard, antes até de o widget ser desenhado outra vez.
+    estado = st.session_state.get(chave_widget)
+    if not estado:
+        return None
+    pontos = estado.get("selection", {}).get(nome_selecao)
+    if pontos:
+        return pontos[0].get(campo)
+    return None
+
+
+def _linha_selecionada(chave_widget: str) -> int | None:
+    # Mesma ideia, mas pra clique de linha em st.dataframe(on_select="rerun").
+    estado = st.session_state.get(chave_widget)
+    if not estado:
+        return None
+    linhas = estado.get("selection", {}).get("rows")
+    return linhas[0] if linhas else None
+
+
 st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
 
@@ -461,6 +484,7 @@ def render_motivos_chart(df: pd.DataFrame, colors: dict) -> None:
     if motivos.empty:
         st.info("Sem atrasos de chegada registrados no período filtrado.")
         return
+    selecao = alt.selection_point(name="sel_motivo", fields=["motivo"], on="click", clear="dblclick")
     base = alt.Chart(motivos).transform_calculate(
         ocorrencias_fmt="replace(format(datum.ocorrencias, ',.0f'), /,/g, '.')"
     )
@@ -472,7 +496,8 @@ def render_motivos_chart(df: pd.DataFrame, colors: dict) -> None:
         y=alt.Y("motivo:N", sort="-x", title="", axis=alt.Axis(domainColor=colors["gridline"], labelColor=colors["ink_secondary"])),
         tooltip=["motivo", "ocorrencias"],
         color=alt.value(BRAND_RED),
-    )
+        opacity=alt.condition(selecao, alt.value(1), alt.value(0.35)),
+    ).add_params(selecao)
     labels = base.mark_text(align="left", dx=4, fontWeight="bold").encode(
         x="ocorrencias:Q", y=alt.Y("motivo:N", sort="-x"), text="ocorrencias_fmt:N",
         color=alt.value(colors["ink_primary"]),
@@ -482,7 +507,7 @@ def render_motivos_chart(df: pd.DataFrame, colors: dict) -> None:
         .properties(height=320, background="transparent")
         .configure_view(strokeWidth=0)
     )
-    st.altair_chart(chart, width="stretch", theme=None)
+    st.altair_chart(chart, width="stretch", theme=None, on_select="rerun", key="chart_motivos")
 
 
 def render_regional_chart(df: pd.DataFrame, colors: dict) -> None:
@@ -490,6 +515,7 @@ def render_regional_chart(df: pd.DataFrame, colors: dict) -> None:
     if regional.empty:
         st.info("Sem dados regionais para o período filtrado.")
         return
+    selecao = alt.selection_point(name="sel_regional", fields=["regional"], on="click", clear="dblclick")
     base = alt.Chart(regional).transform_calculate(
         viagens_fmt="replace(format(datum.viagens, ',.0f'), /,/g, '.')"
     )
@@ -501,24 +527,25 @@ def render_regional_chart(df: pd.DataFrame, colors: dict) -> None:
         ),
         tooltip=["regional", "viagens"],
         color=alt.value(BRAND_RED),
-    )
+        opacity=alt.condition(selecao, alt.value(1), alt.value(0.35)),
+    ).add_params(selecao)
     labels = base.mark_text(dy=-6, fontWeight="bold").encode(
         x=alt.X("regional:N", sort="-y"), y="viagens:Q", text="viagens_fmt:N",
         color=alt.value(colors["ink_primary"]),
     )
     chart = alt.layer(bars, labels).properties(height=320, background="transparent").configure_view(strokeWidth=0)
-    st.altair_chart(chart, width="stretch", theme=None)
+    st.altair_chart(chart, width="stretch", theme=None, on_select="rerun", key="chart_regional")
 
 
 def render_ranking(df: pd.DataFrame) -> None:
-    ranking = ranking_transportadoras(df)
+    ranking = ranking_transportadoras(df).reset_index(drop=True)
     if ranking.empty:
         st.info("Sem dados suficientes para ranking.")
         return
-    ranking = ranking.copy()
-    ranking["viagens"] = ranking["viagens"].apply(milhar_str)
+    exibir = ranking.copy()
+    exibir["viagens"] = exibir["viagens"].apply(milhar_str)
     st.dataframe(
-        ranking.rename(
+        exibir.rename(
             columns={
                 "abreviatura": "Transportadora",
                 "viagens": "Viagens",
@@ -531,6 +558,9 @@ def render_ranking(df: pd.DataFrame) -> None:
             "Viagens": st.column_config.TextColumn(),
             "% no prazo (chegada)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100),
         },
+        on_select="rerun",
+        selection_mode="single-row",
+        key="tabela_ranking",
     )
 
 
@@ -1183,17 +1213,61 @@ def dashboard_screen(user: dict) -> None:
     if user["role"] == "transportadora":
         render_notificacao_reprovacao(user)
 
+    # Cross-filter por clique: clicar numa barra (Regional/Motivos) ou numa
+    # linha do Ranking filtra os outros gráficos/tabelas da seção analítica
+    # (não afeta as 3 tabelas fixas de justificativa, que seguem só os
+    # filtros da lateral — clicar num gráfico não pode esconder uma viagem
+    # que ainda precisa ser justificada). O gráfico/tabela que originou o
+    # clique continua mostrando tudo (com o item clicado destacado), só os
+    # outros ficam restritos — senão sumiriam as outras barras/linhas e
+    # ficaria impossível trocar a seleção.
+    regional_clicada = _campo_clicado("chart_regional", "sel_regional", "regional")
+    motivo_clicado = _campo_clicado("chart_motivos", "sel_motivo", "motivo")
+    transportadora_clicada = None
+    linha_ranking = _linha_selecionada("tabela_ranking")
+    if linha_ranking is not None:
+        ranking_atual = ranking_transportadoras(df).reset_index(drop=True)
+        if linha_ranking < len(ranking_atual):
+            transportadora_clicada = ranking_atual.iloc[linha_ranking]["abreviatura"]
+
+    def com_filtro_clique(base_df: pd.DataFrame, excluir: str | None = None) -> pd.DataFrame:
+        resultado = base_df
+        if regional_clicada and excluir != "regional":
+            resultado = resultado[resultado["regional"] == regional_clicada]
+        if motivo_clicado and excluir != "motivo":
+            resultado = resultado[resultado["motivo_atraso_chegada"] == motivo_clicado]
+        if transportadora_clicada and excluir != "transportadora":
+            resultado = resultado[resultado["abreviatura"] == transportadora_clicada]
+        return resultado
+
+    if regional_clicada or motivo_clicado or transportadora_clicada:
+        chips = [
+            texto
+            for ativo, texto in [
+                (regional_clicada, f"Regional: {regional_clicada}"),
+                (motivo_clicado, f"Motivo: {motivo_clicado}"),
+                (transportadora_clicada, f"Transportadora: {transportadora_clicada}"),
+            ]
+            if ativo
+        ]
+        col_info, col_botao = st.columns([4, 1])
+        col_info.info("Filtro por clique ativo — " + " | ".join(chips), icon="🔎")
+        if col_botao.button("Limpar seleção", width="stretch"):
+            for chave in ("chart_regional", "chart_motivos", "tabela_ranking"):
+                st.session_state.pop(chave, None)
+            st.rerun()
+
     st.divider()
     ALTURA_PAR_GRAFICOS = 380
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Evolução mensal do SLA")
         with st.container(height=ALTURA_PAR_GRAFICOS):
-            render_monthly_chart(df, colors)
+            render_monthly_chart(com_filtro_clique(df), colors)
     with col2:
         st.subheader("Principais motivos de atraso")
         with st.container(height=ALTURA_PAR_GRAFICOS):
-            render_motivos_chart(df, colors)
+            render_motivos_chart(com_filtro_clique(df, excluir="motivo"), colors)
 
     st.divider()
     if user["role"] in ("admin", "interno"):
@@ -1201,19 +1275,19 @@ def dashboard_screen(user: dict) -> None:
         with col3:
             st.subheader("Viagens por regional")
             with st.container(height=ALTURA_PAR_GRAFICOS):
-                render_regional_chart(df, colors)
+                render_regional_chart(com_filtro_clique(df, excluir="regional"), colors)
         with col4:
             st.subheader("Ranking de transportadoras")
             with st.container(height=ALTURA_PAR_GRAFICOS):
-                render_ranking(df)
+                render_ranking(com_filtro_clique(df, excluir="transportadora"))
         st.divider()
 
     st.subheader("Viagens")
-    render_table(df)
+    render_table(com_filtro_clique(df))
 
     st.divider()
     st.subheader("Motoristas ofensores")
-    render_motoristas_ofensores(df)
+    render_motoristas_ofensores(com_filtro_clique(df))
 
     if user["role"] in ("transportadora", "admin", "interno"):
         st.divider()
