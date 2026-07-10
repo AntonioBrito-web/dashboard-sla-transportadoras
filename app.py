@@ -42,6 +42,7 @@ from src.seed import (
     reset_user_password,
     seed_all,
     senha_padrao,
+    senha_padrao_legivel,
 )
 from src.theme import BRAND_RED, chart_colors
 
@@ -778,7 +779,7 @@ def render_gerenciar_acessos_internos() -> None:
             col_padrao, col_nova = st.columns(2)
             with col_padrao:
                 if st.button("Ver senha padrão", key="ver_senha_padrao_interno_botao"):
-                    st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao(usuario_selecionado['username'])}`")
+                    st.info(f"Senha padrão de `{usuario_selecionado['username']}`: `{senha_padrao_legivel(usuario_selecionado['username'])}`")
             with col_nova:
                 if st.button("Gerar nova senha", key="reset_senha_interno_botao"):
                     nova_senha = reset_user_password(usuario_selecionado["username"])

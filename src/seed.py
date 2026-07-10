@@ -95,6 +95,16 @@ def senha_padrao(username: str, length: int = 10) -> str:
     return "".join(senha_chars)
 
 
+def senha_padrao_legivel(username: str) -> str:
+    # Usada só pras contas internas e admin nomeado (não transportadora,
+    # não o admin "raiz"): formato simples usuário+data
+    # (ex.: "antonio_brito09072026"), fácil de calcular de cabeça sabendo
+    # o usuário e a data de hoje. Só é seguro compartilhar isso no e-mail
+    # consolidado porque toda conta nova é obrigada a trocar a senha no
+    # primeiro login (deve_trocar_senha) — não é a senha real de ninguém.
+    return f"{username}{_segredo_senha()}"
+
+
 def _username_pessoa(nome: str) -> str:
     # Padrão pedido: primeiro_nome + "_" + ultimo_nome (ignora nomes do meio).
     partes = [p for p in nome.strip().split() if p]
@@ -200,7 +210,7 @@ def ensure_usuarios_internos() -> list[dict]:
         username = _username_pessoa(nome)
         if username in usernames_existentes:
             continue  # já semeado numa rodada anterior
-        senha = senha_padrao(username)
+        senha = senha_padrao_legivel(username)
         create_user(username, senha, role, transportadora=None, deve_trocar_senha=True)
         usernames_existentes.add(username)
         novos.append({"nome": nome, "usuario": username, "senha": senha, "role": role})
@@ -230,7 +240,7 @@ def criar_acesso_interno(nome: str, role: str, email: str = "") -> dict:
     while username in usernames_existentes:
         i += 1
         username = f"{base}{i}"
-    senha = gen_password(10)
+    senha = senha_padrao_legivel(username)
     create_user(username, senha, role, transportadora=None, email=email.strip() or None, deve_trocar_senha=True)
     print(f"[seed] Conta interna criada (cadastro avulso). usuario={username} role={role} nome={nome}", flush=True)
     return {"nome": nome, "usuario": username, "senha": senha, "role": role}
