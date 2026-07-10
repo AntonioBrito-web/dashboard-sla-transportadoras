@@ -19,6 +19,7 @@ from src.data import (
     fetch_raw_dataframe,
     monthly_sla,
     motivos_atraso_chegada,
+    motoristas_ofensores,
     ranking_transportadoras,
     regional_dist,
 )
@@ -904,6 +905,22 @@ def render_table(df: pd.DataFrame) -> None:
     )
 
 
+def render_motoristas_ofensores(df: pd.DataFrame) -> None:
+    tabela = motoristas_ofensores(df)
+    if tabela.empty:
+        st.info("Sem ocorrências de atraso (responsabilidade da transportadora) no período filtrado.")
+        return
+    tabela = tabela.copy()
+    tabela["Quantidade"] = tabela["Quantidade"].astype(int)
+    st.dataframe(
+        tabela,
+        width="stretch",
+        hide_index=True,
+        height=350,
+        column_config={"Quantidade": st.column_config.NumberColumn(format="%d")},
+    )
+
+
 def render_gerenciar_senhas() -> None:
     with st.sidebar.expander("Gerenciar senhas de transportadoras"):
         try:
@@ -1121,6 +1138,12 @@ def dashboard_screen(user: dict) -> None:
         df = df[df["transportadora"] == user["transportadora"]]
         titulo = user["transportadora"] or "Transportadora"
 
+    anos_disponiveis = sorted(df["ano"].dropna().unique().tolist())
+    if anos_disponiveis:
+        anos_selecionados = st.sidebar.multiselect("Ano", anos_disponiveis, default=anos_disponiveis)
+        if anos_selecionados:
+            df = df[df["ano"].isin(anos_selecionados)]
+
     meses_disponiveis = sorted(df["mes_nome"].dropna().unique().tolist(), key=lambda m: df.loc[df["mes_nome"] == m, "mes"].iloc[0])
     if meses_disponiveis:
         meses_selecionados = st.sidebar.multiselect("Mês", meses_disponiveis, default=meses_disponiveis)
@@ -1132,6 +1155,24 @@ def dashboard_screen(user: dict) -> None:
         quinzenas_selecionadas = st.sidebar.multiselect("Quinzena", quinzenas_disponiveis, default=quinzenas_disponiveis)
         if quinzenas_selecionadas:
             df = df[df["quinzena"].isin(quinzenas_selecionadas)]
+
+    regionais_disponiveis = sorted(df["regional"].dropna().unique().tolist())
+    if regionais_disponiveis:
+        regionais_selecionadas = st.sidebar.multiselect("Regional", regionais_disponiveis, default=regionais_disponiveis)
+        if regionais_selecionadas:
+            df = df[df["regional"].isin(regionais_selecionadas)]
+
+    origens_disponiveis = sorted(df["origem"].dropna().unique().tolist())
+    if origens_disponiveis:
+        origens_selecionadas = st.sidebar.multiselect("Origem", origens_disponiveis, default=origens_disponiveis)
+        if origens_selecionadas:
+            df = df[df["origem"].isin(origens_selecionadas)]
+
+    destinos_disponiveis = sorted(df["destino"].dropna().unique().tolist())
+    if destinos_disponiveis:
+        destinos_selecionados = st.sidebar.multiselect("Destino", destinos_disponiveis, default=destinos_disponiveis)
+        if destinos_selecionados:
+            df = df[df["destino"].isin(destinos_selecionados)]
 
     if st.sidebar.button("Sair"):
         del st.session_state["user"]
@@ -1164,6 +1205,10 @@ def dashboard_screen(user: dict) -> None:
 
     st.subheader("Viagens")
     render_table(df)
+
+    st.divider()
+    st.subheader("Motoristas ofensores")
+    render_motoristas_ofensores(df)
 
     if user["role"] in ("transportadora", "admin", "interno"):
         st.divider()

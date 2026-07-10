@@ -204,6 +204,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     mes_num = pd.to_numeric(df[COL_MES], errors="coerce")
     out["mes"] = mes_num
     out["mes_nome"] = mes_num.map(MESES_PT)
+    out["ano"] = out["data"].dt.year
 
     out["quinzena"] = out["data"].dt.day.map(lambda d: "1ª quinzena" if pd.notna(d) and d <= 15 else ("2ª quinzena" if pd.notna(d) else pd.NA))
 
@@ -474,3 +475,35 @@ def detalhe_saida_real(df_escopo: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     campos = list(COLS_DETALHE_SAIDA_REAL.keys())
     detalhe = out[["chave_viagem", "transportadora"] + campos].rename(columns=COLS_DETALHE_SAIDA_REAL)
     return detalhe.sort_values("Data", ascending=False), COLS_DETALHE_SAIDA_REAL
+
+
+def motoristas_ofensores(df: pd.DataFrame) -> pd.DataFrame:
+    # "Ofensa" = viagem com atraso (saída, chegada ou transit) de
+    # responsabilidade da Transportadora — mesma base das 3 tabelas fixas
+    # de detalhe, pra manter consistência com o resto do app (Operações e
+    # Incontrolável não contam pro motorista).
+    ocorrencias = []
+    for categoria in ("saida", "chegada", "transit"):
+        detalhe, _ = detalhe_categoria(df, categoria)
+        if not detalhe.empty:
+            ocorrencias.append(detalhe[["chave_viagem", "Placa", "Seção da estrada"]])
+
+    colunas_saida = ["Motorista", "Placa", "Seção da estrada", "Reincidência", "Status", "Quantidade"]
+    if not ocorrencias:
+        return pd.DataFrame(columns=colunas_saida)
+
+    todas = pd.concat(ocorrencias, ignore_index=True)
+    todas = todas.merge(df[["chave_viagem", "motorista"]], on="chave_viagem", how="left")
+    todas = todas.dropna(subset=["motorista"])
+    if todas.empty:
+        return pd.DataFrame(columns=colunas_saida)
+
+    agrupado = todas.groupby(["motorista", "Placa", "Seção da estrada"], as_index=False).agg(
+        Quantidade=("chave_viagem", "count")
+    )
+    agrupado = agrupado.rename(columns={"motorista": "Motorista"})
+    agrupado["Reincidência"] = agrupado["Quantidade"].apply(lambda q: "Reincidente" if q > 1 else "Não reincidente")
+    agrupado["Status"] = agrupado["Quantidade"].apply(
+        lambda q: "Crítico" if q >= 3 else ("Atenção" if q == 2 else "Regular")
+    )
+    return agrupado.sort_values("Quantidade", ascending=False)[colunas_saida]
