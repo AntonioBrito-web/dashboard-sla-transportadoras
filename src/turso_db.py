@@ -58,8 +58,15 @@ def _valor(item: dict):
     if tipo == "float":
         return float(item["value"])
     if tipo == "blob":
-        b64 = item.get("base64") or item.get("value") or ""
-        return base64.b64decode(b64) if b64 else b""
+        b64 = (item.get("base64") or item.get("value") or "").strip()
+        if not b64:
+            return b""
+        # Corrige padding ausente defensivamente — alguns caminhos de
+        # transporte JSON removem os "=" finais do base64.
+        faltando = len(b64) % 4
+        if faltando:
+            b64 += "=" * (4 - faltando)
+        return base64.b64decode(b64)
     return item.get("value")
 
 

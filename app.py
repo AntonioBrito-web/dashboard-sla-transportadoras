@@ -534,7 +534,11 @@ def render_tabela_detalhe(
         return
 
     chaves = detalhe["chave_viagem"].tolist()
-    justificativas = get_justificativas(chaves)
+    try:
+        justificativas = get_justificativas(chaves)
+    except Exception as e:
+        st.error(f"Falha ao carregar justificativas do banco: {e}", icon="🚫")
+        return
     detalhe = detalhe.copy()
     detalhe["Justificativa"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
@@ -613,10 +617,14 @@ def render_tabela_detalhe(
                         st.warning("Escreva um texto antes de salvar.", icon="⚠️")
                     else:
                         chave = detalhe.loc[escolha_j, "chave_viagem"]
-                        salvar_justificativa_texto(chave, user["transportadora"], texto.strip(), user["username"])
-                        st.session_state[f"justif_gen_{key_sufixo}"] = gen_justif + 1
-                        st.success(f"Justificativa salva para {detalhe.loc[escolha_j, 'ID Viagem']}.", icon="✅")
-                        st.rerun()
+                        try:
+                            salvar_justificativa_texto(chave, user["transportadora"], texto.strip(), user["username"])
+                        except Exception as e:
+                            st.error(f"Falha ao salvar a justificativa: {e}")
+                        else:
+                            st.session_state[f"justif_gen_{key_sufixo}"] = gen_justif + 1
+                            st.success(f"Justificativa salva para {detalhe.loc[escolha_j, 'ID Viagem']}.", icon="✅")
+                            st.rerun()
 
         with st.expander("Anexar arquivo a uma viagem"):
             if not com_justificativa:
@@ -639,12 +647,16 @@ def render_tabela_detalhe(
                         st.warning("Selecione um arquivo antes de salvar.", icon="⚠️")
                     else:
                         chave = detalhe.loc[escolha, "chave_viagem"]
-                        salvar_justificativa_anexo(
-                            chave, user["transportadora"], arquivo.name, arquivo.getvalue(), user["username"]
-                        )
-                        st.session_state[f"anexo_gen_{key_sufixo}"] = gen_anexo + 1
-                        st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
-                        st.rerun()
+                        try:
+                            salvar_justificativa_anexo(
+                                chave, user["transportadora"], arquivo.name, arquivo.getvalue(), user["username"]
+                            )
+                        except Exception as e:
+                            st.error(f"Falha ao salvar o anexo: {e}")
+                        else:
+                            st.session_state[f"anexo_gen_{key_sufixo}"] = gen_anexo + 1
+                            st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
+                            st.rerun()
 
     if ve_como_admin:
         com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_tem_anexo"]]
@@ -659,7 +671,11 @@ def render_tabela_detalhe(
                     key=f"ver_anexo_sel_{key_sufixo}",
                 )
                 chave_anexo = detalhe.loc[escolha_anexo, "chave_viagem"]
-                resultado_anexo = get_anexo(chave_anexo)
+                try:
+                    resultado_anexo = get_anexo(chave_anexo)
+                except Exception as e:
+                    resultado_anexo = None
+                    st.error(f"Falha ao carregar o anexo: {e}")
                 if resultado_anexo:
                     nome_anexo, bytes_anexo = resultado_anexo
                     if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
@@ -685,9 +701,13 @@ def render_tabela_detalhe(
             if not justificativa_atual or decisao_nova == decisao_antiga:
                 continue
             if decisao_nova == "Reprovado":
-                reprovar_justificativa(chave, user["username"])
-                st.warning(f"Justificativa de {detalhe.loc[idx, 'ID Viagem']} reprovada.", icon="🚫")
-                st.rerun()
+                try:
+                    reprovar_justificativa(chave, user["username"])
+                except Exception as e:
+                    st.error(f"Falha ao reprovar: {e}")
+                else:
+                    st.warning(f"Justificativa de {detalhe.loc[idx, 'ID Viagem']} reprovada.", icon="🚫")
+                    st.rerun()
             elif decisao_nova == "Aprovado":
                 st.session_state[f"aprovando_{chave_id}"] = True
             elif decisao_nova == "Excluir":
@@ -710,10 +730,14 @@ def render_tabela_detalhe(
                 )
                 confirmar = st.form_submit_button("Confirmar aprovação")
             if confirmar:
-                aprovar_justificativa(chave, categoria, user["username"])
-                st.session_state.pop(f"aprovando_{chave_id}", None)
-                st.success("Justificativa aprovada.", icon="✅")
-                st.rerun()
+                try:
+                    aprovar_justificativa(chave, categoria, user["username"])
+                except Exception as e:
+                    st.error(f"Falha ao aprovar: {e}")
+                else:
+                    st.session_state.pop(f"aprovando_{chave_id}", None)
+                    st.success("Justificativa aprovada.", icon="✅")
+                    st.rerun()
 
         excluindo_categoria = [
             idx for idx in detalhe.index
@@ -729,10 +753,14 @@ def render_tabela_detalhe(
             )
             col_confirma, col_cancela = st.columns(2)
             if col_confirma.button("Confirmar exclusão", key=f"excluir_confirma_{key_sufixo}_{chave_id}"):
-                excluir_justificativa(chave)
-                st.session_state.pop(f"excluindo_{chave_id}", None)
-                st.success("Registro excluído.", icon="🗑️")
-                st.rerun()
+                try:
+                    excluir_justificativa(chave)
+                except Exception as e:
+                    st.error(f"Falha ao excluir: {e}")
+                else:
+                    st.session_state.pop(f"excluindo_{chave_id}", None)
+                    st.success("Registro excluído.", icon="🗑️")
+                    st.rerun()
             if col_cancela.button("Cancelar", key=f"excluir_cancela_{key_sufixo}_{chave_id}"):
                 st.session_state.pop(f"excluindo_{chave_id}", None)
                 st.rerun()
@@ -741,7 +769,10 @@ def render_tabela_detalhe(
 def render_notificacao_reprovacao(user: dict) -> None:
     if not TURSO_DISPONIVEL:
         return
-    chaves = chaves_reprovadas(user["transportadora"])
+    try:
+        chaves = chaves_reprovadas(user["transportadora"])
+    except Exception:
+        return
     if chaves:
         st.error(
             f"⚠️ {len(chaves)} justificativa(s) sua(s) foram reprovadas pelo admin. "
@@ -760,7 +791,10 @@ def resumo_justificativa(detalhe: pd.DataFrame) -> dict:
     if detalhe.empty:
         return {"total": 0, "justificado": 0, "pendente": 0}
     chaves = detalhe["chave_viagem"].tolist()
-    justificativas = get_justificativas(chaves) if TURSO_DISPONIVEL else {}
+    try:
+        justificativas = get_justificativas(chaves) if TURSO_DISPONIVEL else {}
+    except Exception:
+        justificativas = {}
     tem_justificativa = detalhe["chave_viagem"].map(
         lambda k: bool(justificativas.get(k, {}).get("justificativa", ""))
     )
