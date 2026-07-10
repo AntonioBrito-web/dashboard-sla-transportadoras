@@ -23,17 +23,16 @@ from src.data import (
     ranking_transportadoras,
     regional_dist,
 )
-from src.db import (
-    CATEGORIAS_APROVACAO,
+from src.db import CATEGORIAS_APROVACAO, get_meta, init_db, set_meta
+from src.turso_db import (
     aprovar_justificativa,
     chaves_reprovadas,
+    get_anexo,
     get_justificativas,
-    get_meta,
-    init_db,
+    init_justificativas_db,
     reprovar_justificativa,
     salvar_justificativa_anexo,
     salvar_justificativa_texto,
-    set_meta,
 )
 from src.seed import (
     criar_acesso_interno,
@@ -126,17 +125,30 @@ def aplicar_padronizacao_usernames() -> None:
         print(f"[seed] Falha ao padronizar usernames automaticamente: {e}", flush=True)
 
 
+@st.cache_resource(show_spinner=False)
+def _preparar_turso() -> bool:
+    # Justificativas/anexos vivem no Turso (externo, persistente) — ver
+    # src/turso_db.py. Se os secrets TURSO_DATABASE_URL/TURSO_AUTH_TOKEN
+    # ainda não estiverem configurados, o app continua no ar (login,
+    # dashboard, etc.), só a parte de justificativa/anexo fica bloqueada
+    # com uma mensagem clara em vez de estourar uma exceção feia.
+    try:
+        init_justificativas_db()
+        return True
+    except Exception as e:
+        print(f"[turso] Justificativas/anexos indisponíveis: {e}", flush=True)
+        return False
+
+
 init_db()  # roda em todo rerun — barato, e garante que o esquema fica sempre atualizado
 preparar_seed()
 aplicar_padronizacao_usernames()
 verificar_reset_admin()
+TURSO_DISPONIVEL = _preparar_turso()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
 MASCOTE_PATH = ASSETS_DIR / "mao mao.png"
-
-ANEXOS_DIR = Path(__file__).resolve().parent / "data" / "anexos"
-ANEXOS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Carregando dados da planilha...")
@@ -472,6 +484,14 @@ def render_tabela_detalhe(
     if detalhe.empty:
         st.info("Sem viagens nesta categoria no período filtrado.")
         return
+    if not TURSO_DISPONIVEL:
+        st.error(
+            "Justificativas e anexos estão indisponíveis no momento — o banco "
+            "persistente (Turso) não está configurado. Configure TURSO_DATABASE_URL "
+            "e TURSO_AUTH_TOKEN em Settings → Secrets no Streamlit Cloud.",
+            icon="🚫",
+        )
+        return
 
     chaves = detalhe["chave_viagem"].tolist()
     justificativas = get_justificativas(chaves)
@@ -482,8 +502,8 @@ def render_tabela_detalhe(
     detalhe["Anexo"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("anexo_nome", "") or "—"
     )
-    detalhe["_anexo_caminho"] = detalhe["chave_viagem"].map(
-        lambda k: justificativas.get(k, {}).get("anexo_caminho", "")
+    detalhe["_tem_anexo"] = detalhe["chave_viagem"].map(
+        lambda k: bool(justificativas.get(k, {}).get("anexo_nome", ""))
     )
     detalhe["_status"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
@@ -579,18 +599,15 @@ def render_tabela_detalhe(
                         st.warning("Selecione um arquivo antes de salvar.", icon="⚠️")
                     else:
                         chave = detalhe.loc[escolha, "chave_viagem"]
-                        nome_seguro = f"{chave.replace('|', '_').replace('/', '-')}_{arquivo.name}"
-                        caminho = ANEXOS_DIR / nome_seguro
-                        caminho.write_bytes(arquivo.getbuffer())
                         salvar_justificativa_anexo(
-                            chave, user["transportadora"], arquivo.name, str(caminho), user["username"]
+                            chave, user["transportadora"], arquivo.name, arquivo.getvalue(), user["username"]
                         )
                         st.session_state[f"anexo_gen_{key_sufixo}"] = gen_anexo + 1
                         st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
                         st.rerun()
 
     if ve_como_admin:
-        com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_anexo_caminho"]]
+        com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_tem_anexo"]]
         with st.expander(f"Ver anexos ({len(com_anexo)})"):
             if not com_anexo:
                 st.caption("Nenhum anexo nesta tabela.")
@@ -601,20 +618,22 @@ def render_tabela_detalhe(
                     format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {detalhe.loc[i, 'Anexo']}",
                     key=f"ver_anexo_sel_{key_sufixo}",
                 )
-                caminho_anexo = Path(detalhe.loc[escolha_anexo, "_anexo_caminho"])
-                if caminho_anexo.exists():
-                    if caminho_anexo.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
-                        st.image(str(caminho_anexo), width="stretch")
+                chave_anexo = detalhe.loc[escolha_anexo, "chave_viagem"]
+                resultado_anexo = get_anexo(chave_anexo)
+                if resultado_anexo:
+                    nome_anexo, bytes_anexo = resultado_anexo
+                    if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                        st.image(bytes_anexo, width="stretch")
                     else:
                         st.caption("Pré-visualização não disponível para este tipo de arquivo — use o botão abaixo.")
                     st.download_button(
-                        f"Baixar {detalhe.loc[escolha_anexo, 'Anexo']}",
-                        data=caminho_anexo.read_bytes(),
-                        file_name=detalhe.loc[escolha_anexo, "Anexo"],
+                        f"Baixar {nome_anexo}",
+                        data=bytes_anexo,
+                        file_name=nome_anexo,
                         key=f"ver_anexo_botao_{key_sufixo}",
                     )
                 else:
-                    st.error("Arquivo não encontrado no servidor (pode ter sido perdido num reinício do app).")
+                    st.error("Anexo não encontrado no banco.")
 
     if pode_aprovar:
         for idx in detalhe.index:
