@@ -1262,11 +1262,11 @@ def dashboard_screen(user: dict) -> None:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Evolução mensal do SLA")
-        with st.container(height=ALTURA_PAR_GRAFICOS):
+        with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
             render_monthly_chart(com_filtro_clique(df), colors)
     with col2:
         st.subheader("Principais motivos de atraso")
-        with st.container(height=ALTURA_PAR_GRAFICOS):
+        with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
             render_motivos_chart(com_filtro_clique(df, excluir="motivo"), colors)
 
     st.divider()
@@ -1274,11 +1274,11 @@ def dashboard_screen(user: dict) -> None:
         col3, col4 = st.columns(2)
         with col3:
             st.subheader("Viagens por regional")
-            with st.container(height=ALTURA_PAR_GRAFICOS):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
                 render_regional_chart(com_filtro_clique(df, excluir="regional"), colors)
         with col4:
             st.subheader("Ranking de transportadoras")
-            with st.container(height=ALTURA_PAR_GRAFICOS):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
                 render_ranking(com_filtro_clique(df, excluir="transportadora"))
         st.divider()
 
