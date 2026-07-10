@@ -1184,23 +1184,28 @@ def dashboard_screen(user: dict) -> None:
         render_notificacao_reprovacao(user)
 
     st.divider()
+    ALTURA_PAR_GRAFICOS = 380
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Evolução mensal do SLA")
-        render_monthly_chart(df, colors)
+        with st.container(height=ALTURA_PAR_GRAFICOS):
+            render_monthly_chart(df, colors)
     with col2:
         st.subheader("Principais motivos de atraso")
-        render_motivos_chart(df, colors)
+        with st.container(height=ALTURA_PAR_GRAFICOS):
+            render_motivos_chart(df, colors)
 
     st.divider()
     if user["role"] in ("admin", "interno"):
         col3, col4 = st.columns(2)
         with col3:
             st.subheader("Viagens por regional")
-            render_regional_chart(df, colors)
+            with st.container(height=ALTURA_PAR_GRAFICOS):
+                render_regional_chart(df, colors)
         with col4:
             st.subheader("Ranking de transportadoras")
-            render_ranking(df)
+            with st.container(height=ALTURA_PAR_GRAFICOS):
+                render_ranking(df)
         st.divider()
 
     st.subheader("Viagens")
