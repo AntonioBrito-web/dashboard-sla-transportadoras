@@ -126,6 +126,22 @@ def init_justificativas_db() -> None:
         )
         """
     )
+    # Anexos múltiplos por viagem vivem numa tabela própria (1:N) — as
+    # colunas anexo_nome/anexo_bytes acima continuam existindo só pelo
+    # anexo único salvo antes dessa mudança (compatibilidade), novos
+    # uploads sempre vão pra cá.
+    _executar(
+        """
+        CREATE TABLE IF NOT EXISTS anexos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chave_viagem TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            dados BLOB NOT NULL,
+            enviado_por TEXT,
+            enviado_em TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
 
 
 def init_usuarios_db() -> None:
@@ -236,10 +252,11 @@ def set_email(username: str, email: str) -> None:
 
 
 def get_justificativas(chaves: list[str]) -> dict:
-    # Não traz anexo_bytes aqui de propósito — essa lista alimenta a tabela
-    # inteira, e puxar o BLOB de cada linha pela rede toda hora deixaria a
-    # tela lenta à toa. O conteúdo do anexo só é buscado sob demanda, em
-    # get_anexo(), quando alguém realmente clica pra ver/baixar um.
+    # Não traz bytes de anexo aqui de propósito — essa lista alimenta a
+    # tabela inteira, e puxar o BLOB de cada linha pela rede toda hora
+    # deixaria a tela lenta à toa. O conteúdo do anexo só é buscado sob
+    # demanda, em get_anexo()/get_anexo_por_id(), quando alguém clica pra
+    # ver/baixar um específico.
     if not chaves:
         return {}
     placeholders = ",".join("?" for _ in chaves)
@@ -248,7 +265,7 @@ def get_justificativas(chaves: list[str]) -> dict:
         f"status_aprovacao, categoria FROM justificativas WHERE chave_viagem IN ({placeholders})",
         chaves,
     )
-    return {
+    base = {
         r[0]: {
             "justificativa": r[1] or "",
             "anexo_nome": r[2] or "",
@@ -257,6 +274,54 @@ def get_justificativas(chaves: list[str]) -> dict:
         }
         for r in resultado["linhas"]
     }
+    for chave, qtd in contar_anexos(chaves).items():
+        base.setdefault(
+            chave, {"justificativa": "", "anexo_nome": "", "status_aprovacao": "pendente", "categoria": ""}
+        )
+        base[chave]["qtd_anexos"] = qtd
+    for info in base.values():
+        info.setdefault("qtd_anexos", 0)
+    return base
+
+
+def contar_anexos(chaves: list[str]) -> dict:
+    # Soma o anexo legado (coluna antiga, no máximo 1 por viagem) com os
+    # novos (tabela anexos, quantos forem) — mantém a contagem certa pra
+    # anexos salvos antes e depois dessa mudança.
+    if not chaves:
+        return {}
+    placeholders = ",".join("?" for _ in chaves)
+    contagem: dict = {}
+    legado = _executar(
+        f"SELECT chave_viagem FROM justificativas "
+        f"WHERE chave_viagem IN ({placeholders}) AND anexo_nome IS NOT NULL AND anexo_nome != ''",
+        chaves,
+    )
+    for r in legado["linhas"]:
+        contagem[r[0]] = contagem.get(r[0], 0) + 1
+    novos = _executar(
+        f"SELECT chave_viagem, COUNT(*) FROM anexos WHERE chave_viagem IN ({placeholders}) GROUP BY chave_viagem",
+        chaves,
+    )
+    for r in novos["linhas"]:
+        contagem[r[0]] = contagem.get(r[0], 0) + r[1]
+    return contagem
+
+
+def listar_anexos(chave_viagem: str) -> list[dict]:
+    # id=None identifica o anexo legado (coluna antiga da própria
+    # justificativa) — get_anexo_por_id não serve pra ele, usa get_anexo().
+    itens = []
+    legado = _executar(
+        "SELECT anexo_nome FROM justificativas WHERE chave_viagem = ? AND anexo_nome IS NOT NULL AND anexo_nome != ''",
+        [chave_viagem],
+    )
+    if legado["linhas"]:
+        itens.append({"id": None, "nome": legado["linhas"][0][0]})
+    novos = _executar("SELECT id, nome FROM anexos WHERE chave_viagem = ? ORDER BY id", [chave_viagem])
+    for r in novos["linhas"]:
+        itens.append({"id": r[0], "nome": r[1]})
+    return itens
 
 
 def get_anexo(chave_viagem: str) -> tuple[str, bytes] | None:
@@ -267,6 +332,27 @@ def get_anexo(chave_viagem: str) -> tuple[str, bytes] | None:
         return None
     nome, dados = resultado["linhas"][0]
     return nome, dados
+
+
+def get_anexo_por_id(anexo_id: int) -> tuple[str, bytes] | None:
+    resultado = _executar("SELECT nome, dados FROM anexos WHERE id = ?", [anexo_id])
+    if not resultado["linhas"]:
+        return None
+    return resultado["linhas"][0][0], resultado["linhas"][0][1]
+
+
+def salvar_anexos(chave_viagem: str, transportadora: str, arquivos: list[tuple[str, bytes]], usuario: str) -> None:
+    for nome, dados in arquivos:
+        _executar(
+            "INSERT INTO anexos (chave_viagem, nome, dados, enviado_por) VALUES (?, ?, ?, ?)",
+            [chave_viagem, nome, dados, usuario],
+        )
+    # Reseta a aprovação pra pendente (novo anexo = precisa reavaliar) —
+    # a justificativa já precisa existir (escrita antes de anexar).
+    _executar(
+        "UPDATE justificativas SET status_aprovacao = 'pendente', categoria = '' WHERE chave_viagem = ?",
+        [chave_viagem],
+    )
 
 
 def salvar_justificativa_texto(chave_viagem: str, transportadora: str, texto: str, usuario: str) -> None:
@@ -282,25 +368,6 @@ def salvar_justificativa_texto(chave_viagem: str, transportadora: str, texto: st
             categoria = ''
         """,
         [chave_viagem, transportadora, texto, usuario],
-    )
-
-
-def salvar_justificativa_anexo(
-    chave_viagem: str, transportadora: str, anexo_nome: str, anexo_bytes: bytes, usuario: str
-) -> None:
-    _executar(
-        """
-        INSERT INTO justificativas (chave_viagem, transportadora, anexo_nome, anexo_bytes, atualizado_por, atualizado_em, status_aprovacao, categoria)
-        VALUES (?, ?, ?, ?, ?, datetime('now'), 'pendente', '')
-        ON CONFLICT(chave_viagem) DO UPDATE SET
-            anexo_nome = excluded.anexo_nome,
-            anexo_bytes = excluded.anexo_bytes,
-            atualizado_por = excluded.atualizado_por,
-            atualizado_em = excluded.atualizado_em,
-            status_aprovacao = 'pendente',
-            categoria = ''
-        """,
-        [chave_viagem, transportadora, anexo_nome, anexo_bytes, usuario],
     )
 
 
@@ -326,6 +393,7 @@ def reprovar_justificativa(chave_viagem: str, usuario: str) -> None:
         """,
         [usuario, chave_viagem],
     )
+    _executar("DELETE FROM anexos WHERE chave_viagem = ?", [chave_viagem])
 
 
 def excluir_justificativa(chave_viagem: str) -> None:
@@ -334,6 +402,7 @@ def excluir_justificativa(chave_viagem: str) -> None:
     # de vez dados de teste/engano do banco, não faz parte do fluxo normal
     # de aprovação.
     _executar("DELETE FROM justificativas WHERE chave_viagem = ?", [chave_viagem])
+    _executar("DELETE FROM anexos WHERE chave_viagem = ?", [chave_viagem])
 
 
 def chaves_reprovadas(transportadora: str) -> list[str]:

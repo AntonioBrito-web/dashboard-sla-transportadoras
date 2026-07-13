@@ -30,12 +30,14 @@ from src.turso_db import (
     chaves_reprovadas,
     excluir_justificativa,
     get_anexo,
+    get_anexo_por_id,
     get_email,
     get_justificativas,
     init_justificativas_db,
     init_usuarios_db,
+    listar_anexos,
     reprovar_justificativa,
-    salvar_justificativa_anexo,
+    salvar_anexos,
     salvar_justificativa_texto,
     set_email,
 )
@@ -596,10 +598,10 @@ def render_tabela_detalhe(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
     )
     detalhe["Anexo"] = detalhe["chave_viagem"].map(
-        lambda k: justificativas.get(k, {}).get("anexo_nome", "") or "—"
+        lambda k: (lambda q: f"{q} anexo(s)" if q else "—")(justificativas.get(k, {}).get("qtd_anexos", 0))
     )
     detalhe["_tem_anexo"] = detalhe["chave_viagem"].map(
-        lambda k: bool(justificativas.get(k, {}).get("anexo_nome", ""))
+        lambda k: justificativas.get(k, {}).get("qtd_anexos", 0) > 0
     )
     detalhe["_status"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
@@ -645,6 +647,7 @@ def render_tabela_detalhe(
         hide_index=True,
         disabled=desabilitadas,
         column_config=config_colunas,
+        row_height=80,
         key=f"detalhe_editor_{key_sufixo}",
     )
 
@@ -693,26 +696,36 @@ def render_tabela_detalhe(
                     format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
                     key=f"anexo_sel_{key_sufixo}_{gen_anexo}",
                 )
-                arquivo = st.file_uploader("Arquivo", key=f"anexo_upload_{key_sufixo}_{gen_anexo}")
-                if st.button("Salvar anexo", key=f"anexo_botao_{key_sufixo}_{gen_anexo}"):
-                    if arquivo is None:
-                        st.warning("Selecione um arquivo antes de salvar.", icon="⚠️")
+                arquivos = st.file_uploader(
+                    "Arquivos (pode selecionar vários de uma vez)",
+                    key=f"anexo_upload_{key_sufixo}_{gen_anexo}",
+                    accept_multiple_files=True,
+                )
+                if st.button("Salvar anexo(s)", key=f"anexo_botao_{key_sufixo}_{gen_anexo}"):
+                    if not arquivos:
+                        st.warning("Selecione ao menos um arquivo antes de salvar.", icon="⚠️")
                     else:
                         chave = detalhe.loc[escolha, "chave_viagem"]
                         try:
-                            salvar_justificativa_anexo(
-                                chave, user["transportadora"], arquivo.name, arquivo.getvalue(), user["username"]
+                            salvar_anexos(
+                                chave,
+                                user["transportadora"],
+                                [(a.name, a.getvalue()) for a in arquivos],
+                                user["username"],
                             )
                         except Exception as e:
-                            st.error(f"Falha ao salvar o anexo: {e}")
+                            st.error(f"Falha ao salvar o(s) anexo(s): {e}")
                         else:
                             st.session_state[f"anexo_gen_{key_sufixo}"] = gen_anexo + 1
-                            st.success(f"Anexo salvo para {detalhe.loc[escolha, 'ID Viagem']}.", icon="📎")
+                            st.success(
+                                f"{len(arquivos)} anexo(s) salvo(s) para {detalhe.loc[escolha, 'ID Viagem']}.",
+                                icon="📎",
+                            )
                             st.rerun()
 
     if ve_como_admin:
         com_anexo = [idx for idx in detalhe.index if detalhe.loc[idx, "_tem_anexo"]]
-        with st.expander(f"Ver anexos ({len(com_anexo)})"):
+        with st.expander(f"Ver anexos ({len(com_anexo)} viagem(ns) com anexo)"):
             if not com_anexo:
                 st.caption("Nenhum anexo nesta tabela.")
             else:
@@ -724,24 +737,34 @@ def render_tabela_detalhe(
                 )
                 chave_anexo = detalhe.loc[escolha_anexo, "chave_viagem"]
                 try:
-                    resultado_anexo = get_anexo(chave_anexo)
+                    lista_anexos = listar_anexos(chave_anexo)
                 except Exception as e:
-                    resultado_anexo = None
-                    st.error(f"Falha ao carregar o anexo: {e}")
-                if resultado_anexo:
-                    nome_anexo, bytes_anexo = resultado_anexo
-                    if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
-                        st.image(bytes_anexo, width="stretch")
+                    lista_anexos = []
+                    st.error(f"Falha ao carregar a lista de anexos: {e}")
+                if not lista_anexos:
+                    st.caption("Nenhum anexo encontrado pra essa viagem.")
+                for item in lista_anexos:
+                    st.markdown(f"**{item['nome']}**")
+                    try:
+                        resultado_anexo = get_anexo(chave_anexo) if item["id"] is None else get_anexo_por_id(item["id"])
+                    except Exception as e:
+                        resultado_anexo = None
+                        st.error(f"Falha ao carregar o anexo: {e}")
+                    if resultado_anexo:
+                        nome_anexo, bytes_anexo = resultado_anexo
+                        if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                            st.image(bytes_anexo, width="stretch")
+                        else:
+                            st.caption("Pré-visualização não disponível para este tipo de arquivo — use o botão abaixo.")
+                        st.download_button(
+                            f"Baixar {nome_anexo}",
+                            data=bytes_anexo,
+                            file_name=nome_anexo,
+                            key=f"ver_anexo_botao_{key_sufixo}_{item['id']}",
+                        )
                     else:
-                        st.caption("Pré-visualização não disponível para este tipo de arquivo — use o botão abaixo.")
-                    st.download_button(
-                        f"Baixar {nome_anexo}",
-                        data=bytes_anexo,
-                        file_name=nome_anexo,
-                        key=f"ver_anexo_botao_{key_sufixo}",
-                    )
-                else:
-                    st.error("Anexo não encontrado no banco.")
+                        st.error("Anexo não encontrado no banco.")
+                    st.divider()
 
     if pode_aprovar:
         for idx in detalhe.index:
