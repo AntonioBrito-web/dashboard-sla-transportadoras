@@ -630,7 +630,7 @@ def render_tabela_detalhe(
         desabilitadas = colunas_exibir
 
     config_colunas = {"Data": st.column_config.DateColumn(format="DD/MM/YYYY")}
-    for col_datahora in ("Previsto chegada", "Real chegada", "Planejado saída", "Real saída"):
+    for col_datahora in ("Previsto chegada", "Real chegada", "Planejado saída", "Real saída", "TT planejado", "TT real"):
         if col_datahora in colunas_exibir:
             config_colunas[col_datahora] = st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
     if pode_aprovar:

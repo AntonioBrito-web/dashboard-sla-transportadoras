@@ -73,8 +73,6 @@ COL_RESPONSABILIDADE_TRANSIT = "Responsabilidade transit time"
 COL_KM = "Quilometragem"
 COL_VALOR_MULTA = "Valor da multa"
 COL_MES = "mês"
-COL_TT_PLANEJADO = "TT PLANEJADO"
-COL_TT_REAL = "TT REAL"
 COL_FAIXA_ATRASO = "Faixa de atraso"
 
 
@@ -181,6 +179,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     status_chegada_raw = df[COL_STATUS_CHEGADA].astype(str)
     out["no_prazo_chegada"] = status_chegada_raw.str.contains("No prazo", case=False, na=False)
     out["fora_prazo_chegada"] = status_chegada_raw.str.contains("Fora do prazo", case=False, na=False)
+    out["status_chegada"] = _strip_cjk(df[COL_STATUS_CHEGADA])
     out["motivo_atraso_chegada"] = _strip_cjk(df[motivo_chegada_col])
     out.loc[df[motivo_chegada_col].isna(), "motivo_atraso_chegada"] = pd.NA
     out["motivo_chegada_menor"] = _strip_cjk(df[COL_MOTIVO_CHEGADA_DETALHE]) if COL_MOTIVO_CHEGADA_DETALHE in df.columns else pd.NA
@@ -190,6 +189,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     status_transit_raw = df.get(COL_STATUS_TRANSIT, pd.Series(dtype=str)).astype(str)
     out["no_prazo_transit"] = status_transit_raw.str.contains("No prazo", case=False, na=False)
     out["fora_prazo_transit"] = status_transit_raw.str.contains("Fora do prazo", case=False, na=False)
+    out["status_transit"] = (
+        _strip_cjk(df[COL_STATUS_TRANSIT]) if COL_STATUS_TRANSIT in df.columns else pd.NA
+    )
     out["motivo_transit"] = _strip_cjk(df[COL_MOTIVO_TRANSIT]) if COL_MOTIVO_TRANSIT in df.columns else pd.NA
     if COL_MOTIVO_TRANSIT in df.columns:
         out.loc[df[COL_MOTIVO_TRANSIT].isna(), "motivo_transit"] = pd.NA
@@ -197,8 +199,11 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     out["km"] = _to_float_br(df[COL_KM]) if COL_KM in df.columns else pd.NA
     out["valor_multa"] = _to_float_br(df[COL_VALOR_MULTA]) if COL_VALOR_MULTA in df.columns else pd.NA
-    out["tt_planejado"] = df.get(COL_TT_PLANEJADO)
-    out["tt_real"] = df.get(COL_TT_REAL)
+    # TT planejado/real reaproveitam o horário previsto/real de chegada (por
+    # pedido do usuário) — os campos originais "TT PLANEJADO"/"TT REAL" da
+    # planilha não são mais usados aqui.
+    out["tt_planejado"] = out["previsto_chegada"]
+    out["tt_real"] = out["real_chegada"]
     out["faixa_atraso"] = df.get(COL_FAIXA_ATRASO)
 
     mes_num = pd.to_numeric(df[COL_MES], errors="coerce")
@@ -339,6 +344,7 @@ COLS_DETALHE_CHEGADA = {
     "destino": "Destino",
     "previsto_chegada": "Previsto chegada",
     "real_chegada": "Real chegada",
+    "status_chegada": "Status chegada",
     "motivo_chegada_menor": "Motivo do atraso chegada (motivo menor)",
 }
 
@@ -368,6 +374,7 @@ COLS_DETALHE_TRANSIT = {
     "destino": "Destino",
     "tt_planejado": "TT planejado",
     "tt_real": "TT real",
+    "status_transit": "Status transit time",
     "motivo_transit": "Motivo do atraso transit time",
 }
 
