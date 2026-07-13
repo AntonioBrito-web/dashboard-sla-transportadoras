@@ -22,6 +22,7 @@ from src.data import (
     motoristas_ofensores,
     ranking_transportadoras,
     regional_dist,
+    transportadora_abreviatura_map,
 )
 from src.db import CATEGORIAS_APROVACAO, get_meta, init_db, set_meta
 from src.turso_db import (
@@ -1157,8 +1158,15 @@ def dashboard_screen(user: dict) -> None:
     colors = chart_colors(get_theme_mode())
 
     if user["role"] in ("admin", "interno"):
-        opcoes = ["Todas"] + sorted(df["transportadora"].dropna().unique().tolist())
-        selecionada = st.sidebar.selectbox("Transportadora", opcoes)
+        mapa_abrev = transportadora_abreviatura_map(df)
+        nomes_disponiveis = sorted(df["transportadora"].dropna().unique().tolist())
+        opcoes_rotulo = {"Todas": "Todas"}
+        for nome in nomes_disponiveis:
+            abrev = mapa_abrev.get(nome)
+            rotulo = f"({abrev}) - {nome}" if abrev else nome
+            opcoes_rotulo[rotulo] = nome
+        escolha_rotulo = st.sidebar.selectbox("Transportadora", list(opcoes_rotulo.keys()))
+        selecionada = opcoes_rotulo[escolha_rotulo]
         if selecionada != "Todas":
             df = df[df["transportadora"] == selecionada]
             titulo = selecionada
