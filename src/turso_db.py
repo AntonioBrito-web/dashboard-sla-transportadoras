@@ -232,8 +232,13 @@ def listar_transportadora_usuarios() -> list[dict]:
 
 
 def listar_usuarios_internos() -> list[dict]:
+    # A conta raiz "admin" fica de fora de propósito: ela usa a fórmula
+    # senha_padrao("admin", 14) (fluxo próprio via secret RESET_ADMIN), não o
+    # formato usuario+data que esta tela usa pra mostrar/resetar senha das
+    # demais contas internas — misturar os dois mostrava senha errada.
     resultado = _executar(
-        "SELECT username, role, email FROM usuarios WHERE role IN ('admin', 'interno') ORDER BY role, username"
+        "SELECT username, role, email FROM usuarios WHERE role IN ('admin', 'interno') "
+        "AND username != 'admin' ORDER BY role, username"
     )
     return [{"username": r[0], "role": r[1], "email": r[2] or ""} for r in resultado["linhas"]]
 
