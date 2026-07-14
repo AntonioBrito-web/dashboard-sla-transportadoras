@@ -2,8 +2,10 @@ import bcrypt
 
 from src.turso_db import (
     admin_existe,
+    alterar_role_usuario,
     criar_usuario,
     get_usuario,
+    listar_todos_usuarios,
     listar_transportadora_usuarios,
     listar_usuarios_internos,
     renomear_usuario,
@@ -61,6 +63,14 @@ def list_transportadora_users() -> list[dict]:
 
 def list_internal_users() -> list[dict]:
     return listar_usuarios_internos()
+
+
+def list_all_users() -> list[dict]:
+    return listar_todos_usuarios()
+
+
+def set_user_role(username: str, novo_role: str, nova_transportadora: str | None = None) -> None:
+    alterar_role_usuario(username, novo_role, nova_transportadora)
 
 
 def set_password(username: str, new_password: str, deve_trocar_senha: bool | None = None) -> None:

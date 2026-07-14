@@ -6,9 +6,11 @@ import streamlit as st
 
 from src.auth import (
     authenticate,
+    list_all_users,
     list_internal_users,
     list_transportadora_users,
     set_password,
+    set_user_role,
     verify_password,
 )
 from src.config import CACHE_TTL_SECONDS
@@ -17,6 +19,7 @@ from src.data import (
     compute_kpis,
     detalhe_categoria,
     fetch_raw_dataframe,
+    load_transportadoras,
     monthly_sla,
     motivos_atraso_chegada,
     motoristas_ofensores,
@@ -1118,6 +1121,81 @@ def render_gerenciar_acessos_internos() -> None:
                     st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
 
 
+def render_alterar_perfil(user: dict) -> None:
+    with st.sidebar.expander("Alterar perfil de usuário"):
+        st.caption(
+            "Troca o perfil (transportadora, interno ou admin) de uma conta já "
+            "existente. Por segurança, só aplica com a senha padrão do admin "
+            "gerada hoje — a mesma exibida em \"Gerenciar senhas\"/\"Gerenciar "
+            "acessos internos\"."
+        )
+        try:
+            usuarios = list_all_users()
+        except Exception as e:
+            st.error(f"Falha ao carregar contas: {e}")
+            return
+        if not usuarios:
+            st.caption("Nenhuma conta encontrada.")
+            return
+
+        opcoes = {
+            f"{u['username']} ({u['role']}" + (f" — {u['transportadora']})" if u["transportadora"] else ")"): u
+            for u in usuarios
+        }
+        escolha_label = st.selectbox("Conta", list(opcoes.keys()), key="alterar_perfil_sel")
+        usuario_selecionado = opcoes[escolha_label]
+
+        papel_atual_idx = {"transportadora": 0, "interno": 1, "admin": 2}.get(usuario_selecionado["role"], 0)
+        novo_papel_label = st.selectbox(
+            "Novo perfil",
+            ["Transportadora", "Interno", "Admin"],
+            index=papel_atual_idx,
+            key="alterar_perfil_novo_role",
+        )
+        novo_role = novo_papel_label.lower()
+
+        nova_transportadora = None
+        if novo_role == "transportadora":
+            nomes_transportadoras = load_transportadoras()
+            idx_atual = (
+                nomes_transportadoras.index(usuario_selecionado["transportadora"])
+                if usuario_selecionado["transportadora"] in nomes_transportadoras
+                else 0
+            )
+            nova_transportadora = st.selectbox(
+                "Transportadora vinculada",
+                nomes_transportadoras,
+                index=idx_atual,
+                key="alterar_perfil_transportadora",
+            )
+
+        senha_confirma = st.text_input(
+            "Senha padrão do admin (hoje)", type="password", key="alterar_perfil_senha_confirma"
+        )
+
+        if usuario_selecionado["username"] == user["username"] and novo_role != "admin":
+            st.warning(
+                "Você não pode remover o próprio acesso admin por aqui (evita ficar "
+                "sem acesso). Peça pra outro admin fazer essa troca.",
+                icon="⚠️",
+            )
+        elif st.button("Aplicar alteração de perfil", key="alterar_perfil_botao"):
+            if senha_confirma != senha_padrao("admin", 14):
+                st.error("Senha padrão do admin incorreta.")
+            elif novo_role == "transportadora" and not nova_transportadora:
+                st.error("Selecione a transportadora vinculada.")
+            else:
+                try:
+                    set_user_role(usuario_selecionado["username"], novo_role, nova_transportadora)
+                except Exception as e:
+                    st.error(f"Falha ao alterar perfil: {e}")
+                else:
+                    st.success(
+                        f"Perfil de `{usuario_selecionado['username']}` alterado para `{novo_role}`."
+                    )
+                    st.rerun()
+
+
 def render_alterar_senha(user: dict) -> None:
     with st.sidebar.expander("Alterar minha senha"):
         email_cadastrado = (user.get("email") or "").strip().lower()
@@ -1175,6 +1253,7 @@ def dashboard_screen(user: dict) -> None:
     if user["role"] == "admin":
         render_gerenciar_senhas()
         render_gerenciar_acessos_internos()
+        render_alterar_perfil(user)
 
     render_alterar_senha(user)
 

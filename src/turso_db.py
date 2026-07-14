@@ -242,6 +242,23 @@ def renomear_usuario(username_antigo: str, username_novo: str) -> None:
     _executar("UPDATE usuarios SET username = ? WHERE username = ?", [username_novo, username_antigo])
 
 
+def listar_todos_usuarios() -> list[dict]:
+    resultado = _executar(
+        "SELECT username, role, transportadora, email FROM usuarios ORDER BY role, username"
+    )
+    return [
+        {"username": r[0], "role": r[1], "transportadora": r[2] or "", "email": r[3] or ""}
+        for r in resultado["linhas"]
+    ]
+
+
+def alterar_role_usuario(username: str, novo_role: str, nova_transportadora: str | None = None) -> None:
+    _executar(
+        "UPDATE usuarios SET role = ?, transportadora = ? WHERE username = ?",
+        [novo_role, nova_transportadora, username],
+    )
+
+
 def get_email(username: str) -> str:
     resultado = _executar("SELECT email FROM usuarios WHERE username = ?", [username])
     return resultado["linhas"][0][0] if resultado["linhas"] and resultado["linhas"][0][0] else ""
