@@ -1193,6 +1193,13 @@ def render_alterar_perfil(user: dict) -> None:
                     st.success(
                         f"Perfil de `{usuario_selecionado['username']}` alterado para `{novo_role}`."
                     )
+                    for chave in (
+                        "alterar_perfil_sel",
+                        "alterar_perfil_novo_role",
+                        "alterar_perfil_transportadora",
+                        "alterar_perfil_senha_confirma",
+                    ):
+                        st.session_state.pop(chave, None)
                     st.rerun()
 
 
