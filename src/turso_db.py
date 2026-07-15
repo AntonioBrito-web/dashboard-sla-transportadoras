@@ -142,6 +142,14 @@ def init_justificativas_db() -> None:
         )
         """
     )
+    # Migracao idempotente: coluna nova numa tabela que ja existia antes
+    # dela. SQLite/libSQL nao tem "ADD COLUMN IF NOT EXISTS", entao tenta e
+    # ignora o erro de coluna duplicada se ela ja foi criada numa rodada
+    # anterior.
+    try:
+        _executar("ALTER TABLE justificativas ADD COLUMN observacao TEXT DEFAULT ''")
+    except RuntimeError:
+        pass
 
 
 def init_usuarios_db() -> None:
@@ -393,14 +401,15 @@ def salvar_justificativa_texto(chave_viagem: str, transportadora: str, texto: st
     )
 
 
-def aprovar_justificativa(chave_viagem: str, categoria: str, usuario: str) -> None:
+def aprovar_justificativa(chave_viagem: str, categoria: str, usuario: str, observacao: str = "") -> None:
     _executar(
         """
         UPDATE justificativas
-        SET status_aprovacao = 'aprovado', categoria = ?, avaliado_por = ?, avaliado_em = datetime('now')
+        SET status_aprovacao = 'aprovado', categoria = ?, observacao = ?,
+            avaliado_por = ?, avaliado_em = datetime('now')
         WHERE chave_viagem = ?
         """,
-        [categoria, usuario, chave_viagem],
+        [categoria, observacao, usuario, chave_viagem],
     )
 
 

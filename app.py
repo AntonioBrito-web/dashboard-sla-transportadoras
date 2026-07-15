@@ -596,7 +596,13 @@ def render_tabela_detalhe(
     except Exception as e:
         st.error(f"Falha ao carregar justificativas do banco: {e}", icon="🚫")
         return
-    detalhe = detalhe.copy()
+    # reset_index é obrigatório aqui: o data_editor rastreia edições pela
+    # posição da linha, e sem um índice 0..n contíguo (o "detalhe" chega
+    # ordenado por Data, com índice espalhado vindo do df original) a
+    # edição registrada podia cair na linha errada — inclusive fazendo o
+    # popup de aprovação nunca aparecer pra linha que o usuário de fato
+    # marcou como "Aprovado".
+    detalhe = detalhe.reset_index(drop=True).copy()
     detalhe["Justificativa"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
     )
@@ -746,28 +752,37 @@ def render_tabela_detalhe(
                     st.error(f"Falha ao carregar a lista de anexos: {e}")
                 if not lista_anexos:
                     st.caption("Nenhum anexo encontrado pra essa viagem.")
-                for item in lista_anexos:
-                    st.markdown(f"**{item['nome']}**")
-                    try:
-                        resultado_anexo = get_anexo(chave_anexo) if item["id"] is None else get_anexo_por_id(item["id"])
-                    except Exception as e:
-                        resultado_anexo = None
-                        st.error(f"Falha ao carregar o anexo: {e}")
-                    if resultado_anexo:
-                        nome_anexo, bytes_anexo = resultado_anexo
-                        if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
-                            st.image(bytes_anexo, width="stretch")
-                        else:
-                            st.caption("Pré-visualização não disponível para este tipo de arquivo — use o botão abaixo.")
-                        st.download_button(
-                            f"Baixar {nome_anexo}",
-                            data=bytes_anexo,
-                            file_name=nome_anexo,
-                            key=f"ver_anexo_botao_{key_sufixo}_{item['id']}",
-                        )
-                    else:
-                        st.error("Anexo não encontrado no banco.")
-                    st.divider()
+                # Galeria em grade de 3 colunas (imagens menores, não mais
+                # uma por linha em tamanho cheio) — quebra a lista em
+                # grupos de 3 e desenha uma linha de colunas por grupo.
+                COLUNAS_GALERIA = 3
+                for inicio in range(0, len(lista_anexos), COLUNAS_GALERIA):
+                    grupo = lista_anexos[inicio:inicio + COLUNAS_GALERIA]
+                    colunas_grade = st.columns(COLUNAS_GALERIA)
+                    for coluna, item in zip(colunas_grade, grupo):
+                        with coluna:
+                            st.caption(item["nome"])
+                            try:
+                                resultado_anexo = (
+                                    get_anexo(chave_anexo) if item["id"] is None else get_anexo_por_id(item["id"])
+                                )
+                            except Exception as e:
+                                resultado_anexo = None
+                                st.error(f"Falha ao carregar: {e}")
+                            if resultado_anexo:
+                                nome_anexo, bytes_anexo = resultado_anexo
+                                if Path(nome_anexo).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                                    st.image(bytes_anexo, width="stretch")
+                                else:
+                                    st.caption("Sem pré-visualização — use o botão abaixo.")
+                                st.download_button(
+                                    "Baixar",
+                                    data=bytes_anexo,
+                                    file_name=nome_anexo,
+                                    key=f"ver_anexo_botao_{key_sufixo}_{item['id']}",
+                                )
+                            else:
+                                st.error("Anexo não encontrado no banco.")
 
     if pode_aprovar:
         for idx in detalhe.index:
@@ -806,10 +821,13 @@ def render_tabela_detalhe(
                 categoria = st.selectbox(
                     "Categoria de responsabilidade", CATEGORIAS_APROVACAO, key=f"cat_{key_sufixo}_{chave_id}"
                 )
+                observacao = st.text_area(
+                    "Observação (opcional)", key=f"obs_{key_sufixo}_{chave_id}"
+                )
                 confirmar = st.form_submit_button("Confirmar aprovação")
             if confirmar:
                 try:
-                    aprovar_justificativa(chave, categoria, user["username"])
+                    aprovar_justificativa(chave, categoria, user["username"], observacao.strip())
                 except Exception as e:
                     st.error(f"Falha ao aprovar: {e}")
                 else:
