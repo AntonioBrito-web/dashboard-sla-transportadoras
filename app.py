@@ -660,33 +660,6 @@ def render_tabela_detalhe(
         key=f"detalhe_editor_{key_sufixo}",
     )
 
-    if pode_aprovar:
-        # Diagnóstico temporário: mostra, pra cada linha que o Streamlit
-        # registrou como editada, exatamente os valores que a lógica de
-        # aprovação abaixo vai comparar (chave, justificativa, decisão nova
-        # vs. decisão atual no banco) — pra investigar por que o popup de
-        # aprovação não está abrindo em produção. Remover depois que o bug
-        # for confirmado e corrigido.
-        estado_bruto = st.session_state.get(f"detalhe_editor_{key_sufixo}", {})
-        linhas_editadas = estado_bruto.get("edited_rows") if isinstance(estado_bruto, dict) else None
-        if linhas_editadas:
-            detalhes_debug = []
-            for pos, mudancas in linhas_editadas.items():
-                if "Decisão" not in mudancas:
-                    continue
-                if pos not in detalhe.index:
-                    detalhes_debug.append(f"pos={pos} FORA DO INDICE ATUAL (linhas={len(detalhe)})")
-                    continue
-                chave_dbg = detalhe.loc[pos, "chave_viagem"]
-                just_dbg = detalhe.loc[pos, "Justificativa"]
-                decisao_atual_dbg = detalhe.loc[pos, "Decisão"]
-                detalhes_debug.append(
-                    f"pos={pos} chave={chave_dbg} decisao_editada={mudancas['Decisão']!r} "
-                    f"decisao_atual_no_banco={decisao_atual_dbg!r} tem_justificativa={bool(just_dbg)}"
-                )
-            if detalhes_debug:
-                st.caption(f"🔧 debug edição (temporário) — {key_sufixo}: " + " | ".join(detalhes_debug))
-
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
         com_justificativa = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
@@ -696,20 +669,32 @@ def render_tabela_detalhe(
                 st.info("Todas as viagens desta tabela já têm justificativa.")
             else:
                 gen_justif = st.session_state.setdefault(f"justif_gen_{key_sufixo}", 0)
-                escolha_j = st.selectbox(
+                # A opção do selectbox é a própria chave_viagem, não a
+                # posição da linha: se a lista de viagens mudar (ex.: o
+                # admin troca o filtro de transportadora/mês na lateral),
+                # uma posição antiga selecionada podia coincidir com uma
+                # posição válida do novo recorte e apontar pra outra viagem
+                # sem o usuário perceber. Com a chave como valor, uma
+                # seleção que não existe mais no novo recorte simplesmente
+                # volta pro padrão em vez de apontar pra viagem errada.
+                mapa_justif = {detalhe.loc[idx, "chave_viagem"]: idx for idx in sem_justificativa}
+                escolha_j_chave = st.selectbox(
                     "Viagem",
-                    options=sem_justificativa,
-                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
+                    options=list(mapa_justif.keys()),
+                    format_func=lambda chave_v: (
+                        f"{detalhe.loc[mapa_justif[chave_v], 'ID Viagem']} — "
+                        f"{formatar_data_br(detalhe.loc[mapa_justif[chave_v], 'Data'])}"
+                    ),
                     key=f"justif_sel_{key_sufixo}_{gen_justif}",
                 )
+                escolha_j = mapa_justif[escolha_j_chave]
                 texto = st.text_area("Justificativa", key=f"justif_texto_{key_sufixo}_{gen_justif}")
                 if st.button("Salvar justificativa", key=f"justif_botao_{key_sufixo}_{gen_justif}"):
                     if not texto.strip():
                         st.warning("Escreva um texto antes de salvar.", icon="⚠️")
                     else:
-                        chave = detalhe.loc[escolha_j, "chave_viagem"]
                         try:
-                            salvar_justificativa_texto(chave, user["transportadora"], texto.strip(), user["username"])
+                            salvar_justificativa_texto(escolha_j_chave, user["transportadora"], texto.strip(), user["username"])
                         except Exception as e:
                             st.error(f"Falha ao salvar a justificativa: {e}")
                         else:
@@ -726,12 +711,19 @@ def render_tabela_detalhe(
                 )
             else:
                 gen_anexo = st.session_state.setdefault(f"anexo_gen_{key_sufixo}", 0)
-                escolha = st.selectbox(
+                # Mesma correção do bloco de justificativa acima: opção
+                # pela chave_viagem, não pela posição da linha.
+                mapa_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa}
+                escolha_chave = st.selectbox(
                     "Viagem",
-                    options=com_justificativa,
-                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {formatar_data_br(detalhe.loc[i, 'Data'])}",
+                    options=list(mapa_anexo.keys()),
+                    format_func=lambda chave_v: (
+                        f"{detalhe.loc[mapa_anexo[chave_v], 'ID Viagem']} — "
+                        f"{formatar_data_br(detalhe.loc[mapa_anexo[chave_v], 'Data'])}"
+                    ),
                     key=f"anexo_sel_{key_sufixo}_{gen_anexo}",
                 )
+                escolha = mapa_anexo[escolha_chave]
                 arquivos = st.file_uploader(
                     "Arquivos (pode selecionar vários de uma vez)",
                     key=f"anexo_upload_{key_sufixo}_{gen_anexo}",
@@ -741,10 +733,9 @@ def render_tabela_detalhe(
                     if not arquivos:
                         st.warning("Selecione ao menos um arquivo antes de salvar.", icon="⚠️")
                     else:
-                        chave = detalhe.loc[escolha, "chave_viagem"]
                         try:
                             salvar_anexos(
-                                chave,
+                                escolha_chave,
                                 user["transportadora"],
                                 [(a.name, a.getvalue()) for a in arquivos],
                                 user["username"],
@@ -765,13 +756,21 @@ def render_tabela_detalhe(
             if not com_anexo:
                 st.caption("Nenhum anexo nesta tabela.")
             else:
-                escolha_anexo = st.selectbox(
+                # Mesma correção: opção pela chave_viagem, não pela posição
+                # da linha — trocar o filtro de transportadora/mês na
+                # lateral não pode fazer esse combo continuar "selecionado"
+                # numa posição que agora aponta pra viagem de outra
+                # transportadora.
+                mapa_ver_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_anexo}
+                chave_anexo = st.selectbox(
                     "Viagem",
-                    options=com_anexo,
-                    format_func=lambda i: f"{detalhe.loc[i, 'ID Viagem']} — {detalhe.loc[i, 'Anexo']}",
+                    options=list(mapa_ver_anexo.keys()),
+                    format_func=lambda chave_v: (
+                        f"{detalhe.loc[mapa_ver_anexo[chave_v], 'ID Viagem']} — "
+                        f"{detalhe.loc[mapa_ver_anexo[chave_v], 'Anexo']}"
+                    ),
                     key=f"ver_anexo_sel_{key_sufixo}",
                 )
-                chave_anexo = detalhe.loc[escolha_anexo, "chave_viagem"]
                 try:
                     lista_anexos = listar_anexos(chave_anexo)
                 except Exception as e:
