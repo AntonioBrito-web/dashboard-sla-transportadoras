@@ -660,6 +660,16 @@ def render_tabela_detalhe(
         key=f"detalhe_editor_{key_sufixo}",
     )
 
+    if pode_aprovar:
+        # Diagnóstico temporário: mostra exatamente o que o Streamlit
+        # registrou como edição bruta nessa tabela, pra investigar por que
+        # o popup de aprovação não está abrindo em produção. Remover depois
+        # que o bug for confirmado e corrigido.
+        estado_bruto = st.session_state.get(f"detalhe_editor_{key_sufixo}", {})
+        linhas_editadas = estado_bruto.get("edited_rows") if isinstance(estado_bruto, dict) else None
+        if linhas_editadas:
+            st.caption(f"🔧 debug edição (temporário) — {key_sufixo}: {linhas_editadas}")
+
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
         com_justificativa = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
