@@ -661,14 +661,31 @@ def render_tabela_detalhe(
     )
 
     if pode_aprovar:
-        # Diagnóstico temporário: mostra exatamente o que o Streamlit
-        # registrou como edição bruta nessa tabela, pra investigar por que
-        # o popup de aprovação não está abrindo em produção. Remover depois
-        # que o bug for confirmado e corrigido.
+        # Diagnóstico temporário: mostra, pra cada linha que o Streamlit
+        # registrou como editada, exatamente os valores que a lógica de
+        # aprovação abaixo vai comparar (chave, justificativa, decisão nova
+        # vs. decisão atual no banco) — pra investigar por que o popup de
+        # aprovação não está abrindo em produção. Remover depois que o bug
+        # for confirmado e corrigido.
         estado_bruto = st.session_state.get(f"detalhe_editor_{key_sufixo}", {})
         linhas_editadas = estado_bruto.get("edited_rows") if isinstance(estado_bruto, dict) else None
         if linhas_editadas:
-            st.caption(f"🔧 debug edição (temporário) — {key_sufixo}: {linhas_editadas}")
+            detalhes_debug = []
+            for pos, mudancas in linhas_editadas.items():
+                if "Decisão" not in mudancas:
+                    continue
+                if pos not in detalhe.index:
+                    detalhes_debug.append(f"pos={pos} FORA DO INDICE ATUAL (linhas={len(detalhe)})")
+                    continue
+                chave_dbg = detalhe.loc[pos, "chave_viagem"]
+                just_dbg = detalhe.loc[pos, "Justificativa"]
+                decisao_atual_dbg = detalhe.loc[pos, "Decisão"]
+                detalhes_debug.append(
+                    f"pos={pos} chave={chave_dbg} decisao_editada={mudancas['Decisão']!r} "
+                    f"decisao_atual_no_banco={decisao_atual_dbg!r} tem_justificativa={bool(just_dbg)}"
+                )
+            if detalhes_debug:
+                st.caption(f"🔧 debug edição (temporário) — {key_sufixo}: " + " | ".join(detalhes_debug))
 
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
