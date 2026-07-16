@@ -1537,15 +1537,25 @@ def injetar_css_cards(colors: dict, modo: str) -> None:
     # vira uma classe CSS "st-key-<key>" (documentado), então dá pra mirar
     # só nos containers marcados com o prefixo "card_" sem depender de
     # nenhum data-testid interno do Streamlit que pode mudar de versão
-    # pra versão.
-    sombra = (
-        "0 1px 3px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.25)"
-        if modo == "dark"
-        else "0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05)"
-    )
+    # pra versão. O container principal (stAppViewBlockContainer) recebe o
+    # mesmo tratamento pra virar um "card de fundo" atrás de tudo, dando
+    # sensação de amplitude ao dashboard inteiro.
+    #
+    # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
+    # outros lados) — grafite no escuro, cinza claro no claro — pra dar
+    # profundidade sem ficar com um halo ao redor do card inteiro.
+    sombra_cor = "rgba(30, 29, 28, 0.55)" if modo == "dark" else "rgba(176, 172, 166, 0.5)"
+    sombra = f"6px 6px 14px 0 {sombra_cor}"
     st.markdown(
         f"""
         <style>
+        [data-testid="stAppViewBlockContainer"], .main .block-container {{
+            background: {colors["surface"]};
+            border-radius: 20px;
+            margin: 0.5rem 1.5rem 2rem 0.5rem;
+            padding: 1.5rem 2rem 2rem 2rem;
+            box-shadow: {sombra};
+        }}
         div[class*="st-key-card_"] {{
             background: {colors["surface"]};
             border: 1px solid {colors["gridline"]};
