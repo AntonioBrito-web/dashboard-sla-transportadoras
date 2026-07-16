@@ -1,3 +1,5 @@
+import calendar
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import altair as alt
@@ -28,6 +30,7 @@ from src.data import (
     transportadora_abreviatura_map,
 )
 from src.db import CATEGORIAS_APROVACAO, get_meta, init_db, set_meta
+from src.email_util import enviar_email
 from src.turso_db import (
     aprovar_justificativa,
     chaves_reprovadas,
@@ -36,13 +39,16 @@ from src.turso_db import (
     get_anexo_por_id,
     get_email,
     get_justificativas,
+    get_meta_turso,
     init_justificativas_db,
+    init_meta_db,
     init_usuarios_db,
     listar_anexos,
     reprovar_justificativa,
     salvar_anexos,
     salvar_justificativa_texto,
     set_email,
+    set_meta_turso,
 )
 from src.seed import (
     criar_acesso_interno,
@@ -53,7 +59,7 @@ from src.seed import (
     senha_padrao,
     senha_padrao_legivel,
 )
-from src.theme import BRAND_RED, chart_colors
+from src.theme import BRAND_RED, STATUS_WARNING, chart_colors
 
 
 def milhar_str(valor) -> str:
@@ -62,6 +68,19 @@ def milhar_str(valor) -> str:
 
 def formatar_data_br(valor) -> str:
     return valor.strftime("%d/%m/%Y") if pd.notna(valor) else ""
+
+
+def formatar_datahora_br(valor_utc: str) -> str:
+    # atualizado_em vem do Turso em UTC (datetime('now') do SQLite/libSQL).
+    # Brasil não observa horário de verão desde 2019, então o offset fixo
+    # -3h serve pra qualquer época do ano sem precisar de zoneinfo/pytz.
+    if not valor_utc:
+        return ""
+    try:
+        dt_utc = datetime.strptime(valor_utc, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return ""
+    return (dt_utc - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M")
 
 
 def _campo_clicado(chave_widget: str, nome_selecao: str, campo: str) -> str | None:
@@ -175,6 +194,7 @@ def _preparar_turso() -> bool:
     try:
         init_justificativas_db()
         init_usuarios_db()
+        init_meta_db()
         print("[turso] Conectado com sucesso — usuários/justificativas/anexos disponíveis.", flush=True)
         return True
     except Exception as e:
@@ -606,6 +626,9 @@ def render_tabela_detalhe(
     detalhe["Justificativa"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
     )
+    detalhe["Data/hora justificativa"] = detalhe["chave_viagem"].map(
+        lambda k: formatar_datahora_br(justificativas.get(k, {}).get("atualizado_em", ""))
+    )
     detalhe["Anexo"] = detalhe["chave_viagem"].map(
         lambda k: (lambda q: f"{q} anexo(s)" if q else "—")(justificativas.get(k, {}).get("qtd_anexos", 0))
     )
@@ -623,7 +646,7 @@ def render_tabela_detalhe(
     # a decisão de aprovação, só o admin de fato faz isso.
     ve_como_admin = user["role"] in ("admin", "interno")
 
-    colunas_exibir = list(colunas.values()) + ["Justificativa", "Anexo"]
+    colunas_exibir = list(colunas.values()) + ["Justificativa", "Data/hora justificativa", "Anexo"]
     if ve_como_admin:
         detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
         colunas_exibir = colunas_exibir + ["Decisão"]
@@ -926,12 +949,128 @@ def resumo_justificativa(detalhe: pd.DataFrame) -> dict:
     return {"total": total, "justificado": total - pendente, "pendente": pendente}
 
 
+def resumo_justificativa_por_transportadora(df: pd.DataFrame) -> pd.DataFrame:
+    # Mesma lógica de escopo do resumo_justificativa (viagens antes de
+    # 01/07/2026 contam como já justificadas), só que agrupada por
+    # transportadora — alimenta os 2 gráficos de acompanhamento e a
+    # notificação automática de prazo.
+    ocorrencias = []
+    for categoria in ("saida", "chegada", "transit"):
+        detalhe, _ = detalhe_categoria(df, categoria)
+        if not detalhe.empty:
+            ocorrencias.append(detalhe[["chave_viagem", "transportadora", "Transportadora", "Data"]])
+
+    colunas_vazias = ["transportadora", "abreviatura", "total", "justificado", "pendente"]
+    if not ocorrencias:
+        return pd.DataFrame(columns=colunas_vazias)
+
+    # Uma mesma viagem pode aparecer em mais de uma categoria (ex.: atraso
+    # de chegada E de transit time) mas tem UMA justificativa só — conta
+    # cada viagem uma vez só, não uma vez por categoria.
+    todas = pd.concat(ocorrencias, ignore_index=True).drop_duplicates(subset="chave_viagem")
+    if todas.empty:
+        return pd.DataFrame(columns=colunas_vazias)
+
+    chaves = todas["chave_viagem"].tolist()
+    try:
+        justificativas = get_justificativas(chaves) if TURSO_DISPONIVEL else {}
+    except Exception:
+        justificativas = {}
+
+    todas["tem_justificativa"] = todas["chave_viagem"].map(
+        lambda k: bool(justificativas.get(k, {}).get("justificativa", ""))
+    )
+    todas["dentro_do_escopo"] = todas["Data"] >= CORTE_JUSTIFICATIVA
+    todas["pendente_flag"] = todas["dentro_do_escopo"] & ~todas["tem_justificativa"]
+
+    resumo = todas.groupby(["transportadora", "Transportadora"], as_index=False).agg(
+        total=("chave_viagem", "count"),
+        pendente=("pendente_flag", "sum"),
+    )
+    resumo = resumo.rename(columns={"Transportadora": "abreviatura"})
+    resumo["pendente"] = resumo["pendente"].astype(int)
+    resumo["justificado"] = resumo["total"] - resumo["pendente"]
+    return resumo.sort_values("total", ascending=False).reset_index(drop=True)
+
+
 def render_resumo_categoria(detalhe: pd.DataFrame) -> None:
     info = resumo_justificativa(detalhe)
     col1, col2, col3 = st.columns(3)
     col1.metric("Total", milhar_str(info["total"]))
     col2.metric("Justificado", milhar_str(info["justificado"]))
     col3.metric("Pendente", milhar_str(info["pendente"]))
+
+
+def render_grafico_atrasos_respondidos(resumo: pd.DataFrame, colors: dict) -> None:
+    if resumo.empty:
+        st.info("Sem atrasos de responsabilidade da transportadora no período filtrado.")
+        return
+    longo = resumo.melt(
+        id_vars=["abreviatura"],
+        value_vars=["total", "justificado"],
+        var_name="metrica",
+        value_name="quantidade",
+    )
+    longo["metrica"] = longo["metrica"].map({"total": "Total de atrasos", "justificado": "Já respondido"})
+    ordem_metrica = ["Total de atrasos", "Já respondido"]
+    base = alt.Chart(longo).transform_calculate(
+        quantidade_fmt="replace(format(datum.quantidade, ',.0f'), /,/g, '.')"
+    )
+    bars = base.mark_bar(cornerRadiusEnd=3).encode(
+        x=alt.X(
+            "abreviatura:N", title="Transportadora", sort="-y",
+            axis=alt.Axis(domainColor=colors["gridline"], labelColor=colors["ink_secondary"]),
+        ),
+        xOffset=alt.XOffset("metrica:N", sort=ordem_metrica),
+        y=alt.Y(
+            "quantidade:Q", title="Viagens",
+            axis=alt.Axis(grid=False, labels=False, ticks=False, domainColor=colors["gridline"]),
+        ),
+        color=alt.Color(
+            "metrica:N",
+            sort=ordem_metrica,
+            scale=alt.Scale(domain=ordem_metrica, range=[colors["categorical"][1], BRAND_RED]),
+            legend=alt.Legend(title="", orient="top"),
+        ),
+        tooltip=["abreviatura", "metrica", "quantidade"],
+    )
+    labels = base.mark_text(dy=-6, fontWeight="bold", fontSize=10).encode(
+        x=alt.X("abreviatura:N", sort="-y"),
+        xOffset=alt.XOffset("metrica:N", sort=ordem_metrica),
+        y="quantidade:Q",
+        text="quantidade_fmt:N",
+        color=alt.value(colors["ink_primary"]),
+    )
+    chart = alt.layer(bars, labels).properties(height=340, background="transparent").configure_view(strokeWidth=0)
+    st.altair_chart(chart, width="stretch", theme=None)
+
+
+def render_grafico_pendentes(resumo: pd.DataFrame, colors: dict) -> None:
+    pendentes = resumo[resumo["pendente"] > 0].sort_values("pendente", ascending=False)
+    if pendentes.empty:
+        st.success("Todas as transportadoras com atraso já justificaram no período filtrado.", icon="✅")
+        return
+    base = alt.Chart(pendentes).transform_calculate(
+        pendente_fmt="replace(format(datum.pendente, ',.0f'), /,/g, '.')"
+    )
+    bars = base.mark_bar(cornerRadiusEnd=3).encode(
+        x=alt.X(
+            "abreviatura:N", title="Transportadora", sort="-y",
+            axis=alt.Axis(domainColor=colors["gridline"], labelColor=colors["ink_secondary"]),
+        ),
+        y=alt.Y(
+            "pendente:Q", title="Viagens sem justificativa",
+            axis=alt.Axis(grid=False, labels=False, ticks=False, domainColor=colors["gridline"]),
+        ),
+        tooltip=["abreviatura", "pendente"],
+        color=alt.value(STATUS_WARNING),
+    )
+    labels = base.mark_text(dy=-6, fontWeight="bold").encode(
+        x=alt.X("abreviatura:N", sort="-y"), y="pendente:Q", text="pendente_fmt:N",
+        color=alt.value(colors["ink_primary"]),
+    )
+    chart = alt.layer(bars, labels).properties(height=320, background="transparent").configure_view(strokeWidth=0)
+    st.altair_chart(chart, width="stretch", theme=None)
 
 
 def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
@@ -1295,8 +1434,96 @@ def render_alterar_senha(user: dict) -> None:
                 st.success("Senha alterada com sucesso! Use a nova senha no próximo login.")
 
 
+def _ultimo_dia_mes(ano: int, mes: int) -> int:
+    return calendar.monthrange(ano, mes)[1]
+
+
+def _quinzena_que_encerrou(hoje: date) -> date | None:
+    # Dispara em 4 dias por mês: dia 15 e dia 16 (fim/início em volta da
+    # 1ª quinzena) e o último dia do mês + dia 1 do mês seguinte (fim/
+    # início em volta da 2ª). Em qualquer outro dia, não dispara nada.
+    ultimo_dia = _ultimo_dia_mes(hoje.year, hoje.month)
+    if hoje.day in (15, 16):
+        return date(hoje.year, hoje.month, 15)
+    if hoje.day == ultimo_dia:
+        return date(hoje.year, hoje.month, ultimo_dia)
+    if hoje.day == 1:
+        mes_anterior = 12 if hoje.month == 1 else hoje.month - 1
+        ano_anterior = hoje.year - 1 if hoje.month == 1 else hoje.year
+        return date(ano_anterior, mes_anterior, _ultimo_dia_mes(ano_anterior, mes_anterior))
+    return None
+
+
+def _somar_dias_uteis(data_base: date, dias: int) -> date:
+    atual = data_base
+    somados = 0
+    while somados < dias:
+        atual += timedelta(days=1)
+        if atual.weekday() < 5:  # 0=segunda ... 4=sexta
+            somados += 1
+    return atual
+
+
+def verificar_notificar_prazo_justificativa(df: pd.DataFrame, hoje: date | None = None) -> None:
+    # Não tem processo em segundo plano no Streamlit Cloud — isso só roda
+    # quando alguém abre o dashboard. Na imensa maioria dos dias a função
+    # sai no primeiro if (nenhum custo). Nos 4 dias-gatilho por mês, o
+    # flag de dedup fica no Turso (não no SQLite local, que é apagado a
+    # cada reboot) pra nunca mandar o mesmo e-mail duas vezes no mesmo dia,
+    # não importa quantas pessoas abram o dashboard ou quantos reboots
+    # aconteçam nesse meio tempo.
+    if not TURSO_DISPONIVEL:
+        return
+    hoje = hoje or date.today()
+    quinzena_fim = _quinzena_que_encerrou(hoje)
+    if quinzena_fim is None:
+        return
+
+    chave_meta = f"notif_prazo_{hoje.isoformat()}"
+    try:
+        if get_meta_turso(chave_meta):
+            return
+    except Exception:
+        return
+
+    try:
+        resumo = resumo_justificativa_por_transportadora(df)
+        pendentes = resumo[resumo["pendente"] > 0]
+        if pendentes.empty:
+            set_meta_turso(chave_meta, "sem_pendentes")
+            return
+
+        emails_por_transportadora = {
+            u["transportadora"]: u["email"] for u in list_transportadora_users() if u.get("email")
+        }
+        prazo = _somar_dias_uteis(quinzena_fim, 3)
+        quinzena_fim_fmt = quinzena_fim.strftime("%d/%m/%Y")
+        prazo_fmt = prazo.strftime("%d/%m/%Y")
+
+        enviados = 0
+        for _, linha in pendentes.iterrows():
+            destino = emails_por_transportadora.get(linha["transportadora"])
+            if not destino:
+                continue
+            corpo = (
+                f"Ola,\n\n"
+                f"A quinzena encerrada em {quinzena_fim_fmt} teve {int(linha['pendente'])} "
+                f"viagem(ns) com atraso de responsabilidade da transportadora ainda sem "
+                f"justificativa registrada.\n\n"
+                f"O prazo para envio da justificativa e ate {prazo_fmt} (3 dias uteis apos "
+                f"o encerramento da quinzena).\n\n"
+                f"Acesse o Dashboard SLA Transportadoras para justificar as viagens pendentes."
+            )
+            if enviar_email(destino, "[Dashboard SLA] Prazo de justificativa de atrasos", corpo):
+                enviados += 1
+        set_meta_turso(chave_meta, f"{enviados}_enviados_de_{len(pendentes)}_pendentes")
+    except Exception as e:
+        print(f"[notificacao] Falha ao verificar/enviar notificacoes de prazo: {e}", flush=True)
+
+
 def dashboard_screen(user: dict) -> None:
     df = load_data()
+    verificar_notificar_prazo_justificativa(df)
 
     st.sidebar.title("Dashboard SLA")
     st.sidebar.caption(f"Usuário: {user['username']} ({user['role']})")
@@ -1449,6 +1676,20 @@ def dashboard_screen(user: dict) -> None:
     st.divider()
     st.subheader("Motoristas ofensores")
     render_motoristas_ofensores(com_filtro_clique(df))
+
+    if user["role"] in ("admin", "interno"):
+        resumo_transportadoras = resumo_justificativa_por_transportadora(df)
+        st.divider()
+        st.subheader("Acompanhamento de justificativas por transportadora")
+        col5, col6 = st.columns(2)
+        with col5:
+            st.caption("Total de atrasos x já respondido")
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+                render_grafico_atrasos_respondidos(resumo_transportadoras, colors)
+        with col6:
+            st.caption("Transportadoras que ainda não justificaram")
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+                render_grafico_pendentes(resumo_transportadoras, colors)
 
     if user["role"] in ("transportadora", "admin", "interno"):
         st.divider()

@@ -272,6 +272,34 @@ def alterar_role_usuario(username: str, novo_role: str, nova_transportadora: str
     )
 
 
+def init_meta_db() -> None:
+    # Flags idempotentes que PRECISAM sobreviver a reboot/redeploy (ex.:
+    # "já mandei o e-mail de prazo hoje") vivem aqui, não em src/db.py
+    # (SQLite local, que é apagado a cada wipe do disco efêmero — usar o
+    # local pra isso reenviaria e-mail duplicado a cada reboot no dia).
+    _executar(
+        """
+        CREATE TABLE IF NOT EXISTS app_meta (
+            chave TEXT PRIMARY KEY,
+            valor TEXT
+        )
+        """
+    )
+
+
+def get_meta_turso(chave: str) -> str | None:
+    resultado = _executar("SELECT valor FROM app_meta WHERE chave = ?", [chave])
+    return resultado["linhas"][0][0] if resultado["linhas"] else None
+
+
+def set_meta_turso(chave: str, valor: str) -> None:
+    _executar(
+        "INSERT INTO app_meta (chave, valor) VALUES (?, ?) "
+        "ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",
+        [chave, valor],
+    )
+
+
 def get_email(username: str) -> str:
     resultado = _executar("SELECT email FROM usuarios WHERE username = ?", [username])
     return resultado["linhas"][0][0] if resultado["linhas"] and resultado["linhas"][0][0] else ""
@@ -292,7 +320,7 @@ def get_justificativas(chaves: list[str]) -> dict:
     placeholders = ",".join("?" for _ in chaves)
     resultado = _executar(
         f"SELECT chave_viagem, justificativa, anexo_nome, "
-        f"status_aprovacao, categoria FROM justificativas WHERE chave_viagem IN ({placeholders})",
+        f"status_aprovacao, categoria, atualizado_em FROM justificativas WHERE chave_viagem IN ({placeholders})",
         chaves,
     )
     base = {
@@ -301,12 +329,20 @@ def get_justificativas(chaves: list[str]) -> dict:
             "anexo_nome": r[2] or "",
             "status_aprovacao": r[3] or "pendente",
             "categoria": r[4] or "",
+            "atualizado_em": r[5] or "",
         }
         for r in resultado["linhas"]
     }
     for chave, qtd in contar_anexos(chaves).items():
         base.setdefault(
-            chave, {"justificativa": "", "anexo_nome": "", "status_aprovacao": "pendente", "categoria": ""}
+            chave,
+            {
+                "justificativa": "",
+                "anexo_nome": "",
+                "status_aprovacao": "pendente",
+                "categoria": "",
+                "atualizado_em": "",
+            },
         )
         base[chave]["qtd_anexos"] = qtd
     for info in base.values():
