@@ -59,7 +59,7 @@ from src.seed import (
     senha_padrao,
     senha_padrao_legivel,
 )
-from src.theme import BRAND_RED, STATUS_WARNING, chart_colors
+from src.theme import BRAND_RED, chart_colors
 
 
 def milhar_str(valor) -> str:
@@ -968,6 +968,11 @@ def resumo_justificativa_por_transportadora(df: pd.DataFrame) -> pd.DataFrame:
     # de chegada E de transit time) mas tem UMA justificativa só — conta
     # cada viagem uma vez só, não uma vez por categoria.
     todas = pd.concat(ocorrencias, ignore_index=True).drop_duplicates(subset="chave_viagem")
+    # Só entra no "Total" quem está dentro do período de cobrança (viagens
+    # antes de 01/07/2026 nem contam pra pendência nem pro total aqui) —
+    # sem isso, "Total" incluía atraso histórico de anos atrás e nunca
+    # batia com "Já respondido" + "Pendente" dos 2 gráficos lado a lado.
+    todas = todas[todas["Data"] >= CORTE_JUSTIFICATIVA]
     if todas.empty:
         return pd.DataFrame(columns=colunas_vazias)
 
@@ -980,16 +985,14 @@ def resumo_justificativa_por_transportadora(df: pd.DataFrame) -> pd.DataFrame:
     todas["tem_justificativa"] = todas["chave_viagem"].map(
         lambda k: bool(justificativas.get(k, {}).get("justificativa", ""))
     )
-    todas["dentro_do_escopo"] = todas["Data"] >= CORTE_JUSTIFICATIVA
-    todas["pendente_flag"] = todas["dentro_do_escopo"] & ~todas["tem_justificativa"]
 
     resumo = todas.groupby(["transportadora", "Transportadora"], as_index=False).agg(
         total=("chave_viagem", "count"),
-        pendente=("pendente_flag", "sum"),
+        justificado=("tem_justificativa", "sum"),
     )
     resumo = resumo.rename(columns={"Transportadora": "abreviatura"})
-    resumo["pendente"] = resumo["pendente"].astype(int)
-    resumo["justificado"] = resumo["total"] - resumo["pendente"]
+    resumo["justificado"] = resumo["justificado"].astype(int)
+    resumo["pendente"] = resumo["total"] - resumo["justificado"]
     return resumo.sort_values("total", ascending=False).reset_index(drop=True)
 
 
@@ -1029,7 +1032,7 @@ def render_grafico_atrasos_respondidos(resumo: pd.DataFrame, colors: dict) -> No
         color=alt.Color(
             "metrica:N",
             sort=ordem_metrica,
-            scale=alt.Scale(domain=ordem_metrica, range=[colors["categorical"][1], BRAND_RED]),
+            scale=alt.Scale(domain=ordem_metrica, range=[colors["cor_secundaria"], BRAND_RED]),
             legend=alt.Legend(title="", orient="top"),
         ),
         tooltip=["abreviatura", "metrica", "quantidade"],
@@ -1063,7 +1066,7 @@ def render_grafico_pendentes(resumo: pd.DataFrame, colors: dict) -> None:
             axis=alt.Axis(grid=False, labels=False, ticks=False, domainColor=colors["gridline"]),
         ),
         tooltip=["abreviatura", "pendente"],
-        color=alt.value(STATUS_WARNING),
+        color=alt.value(BRAND_RED),
     )
     labels = base.mark_text(dy=-6, fontWeight="bold").encode(
         x=alt.X("abreviatura:N", sort="-y"), y="pendente:Q", text="pendente_fmt:N",

@@ -493,9 +493,9 @@ def motoristas_ofensores(df: pd.DataFrame) -> pd.DataFrame:
     for categoria in ("saida", "chegada", "transit"):
         detalhe, _ = detalhe_categoria(df, categoria)
         if not detalhe.empty:
-            ocorrencias.append(detalhe[["chave_viagem", "Placa", "Seção da estrada"]])
+            ocorrencias.append(detalhe[["chave_viagem", "Transportadora", "Placa", "Seção da estrada"]])
 
-    colunas_saida = ["Motorista", "Placa", "Seção da estrada", "Reincidência", "Status", "Quantidade"]
+    colunas_saida = ["Motorista", "Transportadora", "Placa", "Seção da estrada", "Reincidência", "Status", "Quantidade"]
     if not ocorrencias:
         return pd.DataFrame(columns=colunas_saida)
 
@@ -505,7 +505,7 @@ def motoristas_ofensores(df: pd.DataFrame) -> pd.DataFrame:
     if todas.empty:
         return pd.DataFrame(columns=colunas_saida)
 
-    agrupado = todas.groupby(["motorista", "Placa", "Seção da estrada"], as_index=False).agg(
+    agrupado = todas.groupby(["motorista", "Transportadora", "Placa", "Seção da estrada"], as_index=False).agg(
         Quantidade=("chave_viagem", "count")
     )
     agrupado = agrupado.rename(columns={"motorista": "Motorista"})
