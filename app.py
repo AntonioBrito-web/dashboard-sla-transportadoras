@@ -1097,23 +1097,29 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
             ["Detalhe Atraso Saída", "Detalhe Atraso Chegada", "Detalhe Atraso Transit time"]
         )
         with aba_saida:
-            render_resumo_categoria(detalhe_saida)
-            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida", mostrar_titulo=False)
+            with st.container(key="card_detalhe_saida"):
+                render_resumo_categoria(detalhe_saida)
+                render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida", mostrar_titulo=False)
         with aba_chegada:
-            render_resumo_categoria(detalhe_chegada)
-            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada", mostrar_titulo=False)
+            with st.container(key="card_detalhe_chegada"):
+                render_resumo_categoria(detalhe_chegada)
+                render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada", mostrar_titulo=False)
         with aba_transit:
-            render_resumo_categoria(detalhe_transit)
-            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit", mostrar_titulo=False)
+            with st.container(key="card_detalhe_transit"):
+                render_resumo_categoria(detalhe_transit)
+                render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit", mostrar_titulo=False)
     else:
         # Transportadora vê as 3 tabelas empilhadas — o resumo fica logo
         # acima de cada tabela respectiva, não um bloco único no topo.
-        render_resumo_categoria(detalhe_saida)
-        render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
-        render_resumo_categoria(detalhe_chegada)
-        render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
-        render_resumo_categoria(detalhe_transit)
-        render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
+        with st.container(key="card_detalhe_saida"):
+            render_resumo_categoria(detalhe_saida)
+            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
+        with st.container(key="card_detalhe_chegada"):
+            render_resumo_categoria(detalhe_chegada)
+            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
+        with st.container(key="card_detalhe_transit"):
+            render_resumo_categoria(detalhe_transit)
+            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
 
 
 def render_table(df: pd.DataFrame) -> None:
@@ -1524,6 +1530,35 @@ def verificar_notificar_prazo_justificativa(df: pd.DataFrame, hoje: date | None 
         print(f"[notificacao] Falha ao verificar/enviar notificacoes de prazo: {e}", flush=True)
 
 
+def injetar_css_cards(colors: dict, modo: str) -> None:
+    # Cada gráfico/tabela ganha uma moldura tipo "card" (fundo levemente
+    # destacado, cantos arredondados, sombra sutil) em vez do traço reto
+    # que o border=True padrão do Streamlit desenha — st.container(key=...)
+    # vira uma classe CSS "st-key-<key>" (documentado), então dá pra mirar
+    # só nos containers marcados com o prefixo "card_" sem depender de
+    # nenhum data-testid interno do Streamlit que pode mudar de versão
+    # pra versão.
+    sombra = (
+        "0 1px 3px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.25)"
+        if modo == "dark"
+        else "0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.05)"
+    )
+    st.markdown(
+        f"""
+        <style>
+        div[class*="st-key-card_"] {{
+            background: {colors["surface"]};
+            border: 1px solid {colors["gridline"]};
+            border-radius: 14px;
+            padding: 1rem 1.25rem 0.5rem 1.25rem;
+            box-shadow: {sombra};
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def dashboard_screen(user: dict) -> None:
     df = load_data()
     verificar_notificar_prazo_justificativa(df)
@@ -1538,7 +1573,9 @@ def dashboard_screen(user: dict) -> None:
 
     render_alterar_senha(user)
 
-    colors = chart_colors(get_theme_mode())
+    modo_tema = get_theme_mode()
+    colors = chart_colors(modo_tema)
+    injetar_css_cards(colors, modo_tema)
 
     if user["role"] in ("admin", "interno"):
         mapa_abrev = transportadora_abreviatura_map(df)
@@ -1653,11 +1690,11 @@ def dashboard_screen(user: dict) -> None:
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Evolução mensal do SLA")
-        with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+        with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_evolucao"):
             render_monthly_chart(com_filtro_clique(df), colors)
     with col2:
         st.subheader("Principais motivos de atraso")
-        with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+        with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_motivos"):
             render_motivos_chart(com_filtro_clique(df, excluir="motivo"), colors)
 
     st.divider()
@@ -1665,20 +1702,22 @@ def dashboard_screen(user: dict) -> None:
         col3, col4 = st.columns(2)
         with col3:
             st.subheader("Viagens por regional")
-            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_regional"):
                 render_regional_chart(com_filtro_clique(df, excluir="regional"), colors)
         with col4:
             st.subheader("Ranking de transportadoras")
-            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_ranking"):
                 render_ranking(com_filtro_clique(df, excluir="transportadora"))
         st.divider()
 
     st.subheader("Viagens")
-    render_table(com_filtro_clique(df))
+    with st.container(key="card_viagens"):
+        render_table(com_filtro_clique(df))
 
     st.divider()
     st.subheader("Motoristas ofensores")
-    render_motoristas_ofensores(com_filtro_clique(df))
+    with st.container(key="card_motoristas"):
+        render_motoristas_ofensores(com_filtro_clique(df))
 
     if user["role"] in ("admin", "interno"):
         resumo_transportadoras = resumo_justificativa_por_transportadora(df)
@@ -1687,11 +1726,11 @@ def dashboard_screen(user: dict) -> None:
         col5, col6 = st.columns(2)
         with col5:
             st.caption("Total de atrasos x já respondido")
-            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_atrasos_resp"):
                 render_grafico_atrasos_respondidos(resumo_transportadoras, colors)
         with col6:
             st.caption("Transportadoras que ainda não justificaram")
-            with st.container(height=ALTURA_PAR_GRAFICOS, border=False):
+            with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_pendentes"):
                 render_grafico_pendentes(resumo_transportadoras, colors)
 
     if user["role"] in ("transportadora", "admin", "interno"):
