@@ -636,7 +636,7 @@ def render_tabela_detalhe(
     detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str, mostrar_titulo: bool = True
 ) -> None:
     if mostrar_titulo:
-        st.markdown(f"#### {titulo}")
+        st.subheader(titulo)
     if detalhe.empty:
         st.info("Sem viagens nesta categoria no período filtrado.")
         return
@@ -1125,7 +1125,7 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     detalhe_chegada, colunas_chegada = detalhe_categoria(df, "chegada")
     detalhe_transit, colunas_transit = detalhe_categoria(df, "transit")
 
-    st.markdown("###### DETALHAMENTO DE JUSTIFICATIVAS DE ATRASOS")
+    st.subheader("Detalhamento de justificativas de atrasos")
 
     if user["role"] in ("admin", "interno"):
         # No admin/interno, as 3 viram abas clicáveis em vez de empilhadas —
@@ -1133,32 +1133,32 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
         # Justificado/Pendente) fica dentro de cada aba, então mostra só os
         # números da tabela que está selecionada no momento.
         aba_saida, aba_chegada, aba_transit = st.tabs(
-            ["Detalhe Atraso Saída", "Detalhe Atraso Chegada", "Detalhe Atraso Transit time"]
+            ["Detalhe atraso saída", "Detalhe atraso chegada", "Detalhe atraso transit time"]
         )
         with aba_saida:
             with st.container(key="card_detalhe_saida"):
                 render_resumo_categoria(detalhe_saida)
-                render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida", mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida", mostrar_titulo=False)
         with aba_chegada:
             with st.container(key="card_detalhe_chegada"):
                 render_resumo_categoria(detalhe_chegada)
-                render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada", mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada", mostrar_titulo=False)
         with aba_transit:
             with st.container(key="card_detalhe_transit"):
                 render_resumo_categoria(detalhe_transit)
-                render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit", mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit", mostrar_titulo=False)
     else:
         # Transportadora vê as 3 tabelas empilhadas — o resumo fica logo
         # acima de cada tabela respectiva, não um bloco único no topo.
         with st.container(key="card_detalhe_saida"):
             render_resumo_categoria(detalhe_saida)
-            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe Atraso Saída", "fixo_saida")
+            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida")
         with st.container(key="card_detalhe_chegada"):
             render_resumo_categoria(detalhe_chegada)
-            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe Atraso Chegada", "fixo_chegada")
+            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada")
         with st.container(key="card_detalhe_transit"):
             render_resumo_categoria(detalhe_transit)
-            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe Atraso Transit time", "fixo_transit")
+            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit")
 
 
 def render_table(df: pd.DataFrame) -> None:
