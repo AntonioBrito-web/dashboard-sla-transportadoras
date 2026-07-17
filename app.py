@@ -108,6 +108,18 @@ def _linha_selecionada(chave_widget: str) -> int | None:
 
 st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..900;1,300..900&display=swap');
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 @st.cache_resource(show_spinner="Carregando transportadoras...")
 def preparar_seed() -> str | None:
@@ -1577,7 +1589,7 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
     """
 
 
-def injetar_css_cards() -> None:
+def injetar_css_cards(modo: str) -> None:
     # Cada gráfico/tabela ganha uma moldura tipo "card" (fundo levemente
     # destacado, cantos arredondados, sombra sutil) em vez do traço reto
     # que o border=True padrão do Streamlit desenha — st.container(key=...)
@@ -1589,23 +1601,18 @@ def injetar_css_cards() -> None:
     # sensação de amplitude ao dashboard inteiro.
     #
     # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
-    # outros lados) — grafite no escuro, cinza claro no claro. O modo NÃO
-    # vem do seletor "Aparência dos gráficos" da lateral (esse é manual e
-    # só ajusta as cores dos gráficos, tem gente que nunca mexe nele) — o
-    # bloco claro é o padrão e o escuro entra via
-    # @media (prefers-color-scheme: dark), que reflete o tema real do
-    # navegador/sistema (e do próprio tema do Streamlit na prática, já
-    # que a esmagadora maioria usa "Use system setting"), então funciona
-    # sozinho tanto no escuro escolhido manualmente quanto no automático.
+    # outros lados) — grafite no escuro, cinza claro no claro. Já tentei
+    # resolver isso com @media (prefers-color-scheme: dark), mas isso
+    # reflete a preferência do SISTEMA OPERACIONAL/navegador, não o tema
+    # que o Streamlit está de fato usando — quem tem o SO no escuro mas
+    # escolheu "Light" no tema do Streamlit (ou vice-versa) via
+    # ⋮ → Settings → Theme via esse mismatch, os cards ficavam escuros
+    # num app claro. Agora o modo vem de _detectar_tema() (st.context.
+    # theme.type, a fonte oficial de "qual tema o Streamlit está
+    # renderizando agora"), não do seletor manual "Aparência dos
+    # gráficos" (que só ajusta cor de gráfico e é independente disso).
     st.markdown(
-        f"""
-        <style>
-        {_bloco_css_cards(chart_colors("light"), "rgba(150, 146, 140, 0.55)")}
-        @media (prefers-color-scheme: dark) {{
-            {_bloco_css_cards(chart_colors("dark"), "rgba(0, 0, 0, 0.75)")}
-        }}
-        </style>
-        """,
+        f"<style>{_bloco_css_cards(chart_colors(modo), 'rgba(0, 0, 0, 0.75)' if modo == 'dark' else 'rgba(150, 146, 140, 0.55)')}</style>",
         unsafe_allow_html=True,
     )
 
@@ -1626,7 +1633,7 @@ def dashboard_screen(user: dict) -> None:
 
     modo_tema = get_theme_mode()
     colors = chart_colors(modo_tema)
-    injetar_css_cards()
+    injetar_css_cards(_detectar_tema())
 
     if user["role"] in ("admin", "interno"):
         mapa_abrev = transportadora_abreviatura_map(df)
