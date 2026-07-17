@@ -109,18 +109,9 @@ def _linha_selecionada(chave_widget: str) -> int | None:
 
 
 st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
-
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..900;1,300..900&display=swap');
-    html, body, [class*="css"] {
-        font-family: 'Montserrat', sans-serif;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# Fonte Montserrat é definida em .streamlit/config.toml (theme.font) — isso
+# alcança inclusive o texto desenhado em canvas do st.dataframe/data_editor,
+# que uma injeção de CSS (font-family em html/body) não consegue tocar.
 
 
 @st.cache_resource(show_spinner="Carregando transportadoras...")
