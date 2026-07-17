@@ -1234,7 +1234,7 @@ def _tabela_html(df: pd.DataFrame, colors: dict, formatadores: dict | None = Non
     )
 
 
-def render_table(df: pd.DataFrame) -> None:
+def render_table(df: pd.DataFrame, modo_tema: str) -> None:
     exibir = df[
         ["data", "id_viagem", "status", "abreviatura", "motorista", "placa", "origem", "destino", "regional"]
     ].copy()
@@ -1259,7 +1259,7 @@ def render_table(df: pd.DataFrame) -> None:
     )
     exibir = exibir.sort_values("Data", ascending=False)
     pagina = _paginar(exibir, key="pagina_viagens")
-    colors = chart_colors(_detectar_tema())
+    colors = chart_colors(modo_tema)
     st.markdown(
         _tabela_html(
             pagina,
@@ -1270,7 +1270,7 @@ def render_table(df: pd.DataFrame) -> None:
     )
 
 
-def render_motoristas_ofensores(df: pd.DataFrame) -> None:
+def render_motoristas_ofensores(df: pd.DataFrame, modo_tema: str) -> None:
     tabela = motoristas_ofensores(df)
     if tabela.empty:
         st.info("Sem ocorrências de atraso (responsabilidade da transportadora) no período filtrado.")
@@ -1278,7 +1278,7 @@ def render_motoristas_ofensores(df: pd.DataFrame) -> None:
     tabela = tabela.copy()
     tabela["Quantidade"] = tabela["Quantidade"].astype(int)
     pagina = _paginar(tabela, key="pagina_motoristas")
-    colors = chart_colors(_detectar_tema())
+    colors = chart_colors(modo_tema)
     st.markdown(
         _tabela_html(pagina, colors, formatadores={"Quantidade": lambda v: str(int(v))}),
         unsafe_allow_html=True,
@@ -1661,6 +1661,7 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
             border-radius: 14px;
             padding: 1rem 1.25rem 0.5rem 1.25rem;
             box-shadow: {sombra};
+            overflow: hidden;
         }}
     """
 
@@ -1677,16 +1678,19 @@ def injetar_css_cards(modo: str) -> None:
     # sensação de amplitude ao dashboard inteiro.
     #
     # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
-    # outros lados) — grafite no escuro, cinza claro no claro. Já tentei
-    # resolver isso com @media (prefers-color-scheme: dark), mas isso
-    # reflete a preferência do SISTEMA OPERACIONAL/navegador, não o tema
-    # que o Streamlit está de fato usando — quem tem o SO no escuro mas
-    # escolheu "Light" no tema do Streamlit (ou vice-versa) via
-    # ⋮ → Settings → Theme via esse mismatch, os cards ficavam escuros
-    # num app claro. Agora o modo vem de _detectar_tema() (st.context.
-    # theme.type, a fonte oficial de "qual tema o Streamlit está
-    # renderizando agora"), não do seletor manual "Aparência dos
-    # gráficos" (que só ajusta cor de gráfico e é independente disso).
+    # outros lados) — grafite no escuro, cinza claro no claro. O modo vem
+    # do MESMO seletor manual "Aparência dos gráficos" da lateral usado
+    # pras cores dos gráficos (get_theme_mode()), não de detecção
+    # automática. Já tentei duas formas de detectar sozinho e as duas
+    # falham pro mesmo motivo: trocar o tema pelo menu nativo do
+    # Streamlit (⋮ → Light/Dark/System) é uma ação só do lado do
+    # navegador — não dispara rerun do script — então nem
+    # @media (prefers-color-scheme) (que reflete o SO, não o tema
+    # escolhido no Streamlit) nem _detectar_tema()/st.context.theme.type
+    # (que só atualiza no PRÓXIMO rerun de qualquer forma, então fica
+    # "atrasado" até alguém mexer em outro filtro) resolvem de verdade.
+    # O seletor manual da lateral é a única fonte confiável, porque
+    # qualquer mudança nele já dispara rerun por ser um widget do script.
     st.markdown(
         f"<style>{_bloco_css_cards(chart_colors(modo), 'rgba(0, 0, 0, 0.75)' if modo == 'dark' else 'rgba(150, 146, 140, 0.55)')}</style>",
         unsafe_allow_html=True,
@@ -1709,7 +1713,7 @@ def dashboard_screen(user: dict) -> None:
 
     modo_tema = get_theme_mode()
     colors = chart_colors(modo_tema)
-    injetar_css_cards(_detectar_tema())
+    injetar_css_cards(modo_tema)
 
     if user["role"] in ("admin", "interno"):
         mapa_abrev = transportadora_abreviatura_map(df)
@@ -1846,12 +1850,12 @@ def dashboard_screen(user: dict) -> None:
 
     st.subheader("Viagens")
     with st.container(key="card_viagens"):
-        render_table(com_filtro_clique(df))
+        render_table(com_filtro_clique(df), modo_tema)
 
     st.divider()
     st.subheader("Motoristas ofensores")
     with st.container(key="card_motoristas"):
-        render_motoristas_ofensores(com_filtro_clique(df))
+        render_motoristas_ofensores(com_filtro_clique(df), modo_tema)
 
     if user["role"] in ("admin", "interno"):
         resumo_transportadoras = resumo_justificativa_por_transportadora(df)
