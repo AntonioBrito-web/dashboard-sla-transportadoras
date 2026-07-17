@@ -1,4 +1,6 @@
+import base64
 import calendar
+import html as html_lib
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -248,6 +250,11 @@ LOGO_PATH = ASSETS_DIR / "Logo-JT-Express-Red.png"
 MASCOTE_PATH = ASSETS_DIR / "mao mao.png"
 
 
+@st.cache_data(show_spinner=False)
+def _imagem_base64(caminho: str) -> str:
+    return base64.b64encode(Path(caminho).read_bytes()).decode("ascii")
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Carregando dados da planilha...")
 def load_data() -> pd.DataFrame:
     raw = fetch_raw_dataframe()
@@ -333,15 +340,37 @@ def render_header() -> None:
 def render_hero(titulo: str, df: pd.DataFrame) -> None:
     _inject_header_css("app-hero")
     with st.container(key="app-hero"):
-        col_logo, col_title, col_mascote = st.columns([2, 5, 1])
-        with col_logo:
-            if LOGO_PATH.exists():
-                st.image(str(LOGO_PATH), width=160)
-        with col_title:
-            st.title(f"SLA — {titulo}")
-        with col_mascote:
-            if MASCOTE_PATH.exists():
-                st.image(str(MASCOTE_PATH), width=90)
+        # Linha do logo/título/mascote em HTML+flexbox em vez de
+        # st.columns: com colunas, o título só fica centralizado dentro da
+        # coluna do meio (que não tem a mesma largura que sobra dos dois
+        # lados), então o centro visual do texto derivava pro lado que
+        # tivesse a coluna mais estreita. Com position:absolute cobrindo a
+        # largura inteira da linha, o título centraliza de verdade em
+        # relação ao banner inteiro, e logo/mascote ficam encostados nas
+        # pontas (flex space-between) alinhados pelo topo com o título.
+        logo_html = (
+            f'<img src="data:image/png;base64,{_imagem_base64(str(LOGO_PATH))}" style="height:48px;">'
+            if LOGO_PATH.exists()
+            else ""
+        )
+        mascote_html = (
+            f'<img src="data:image/png;base64,{_imagem_base64(str(MASCOTE_PATH))}" style="height:56px;">'
+            if MASCOTE_PATH.exists()
+            else ""
+        )
+        titulo_escapado = html_lib.escape(f"SLA — {titulo}")
+        st.markdown(
+            f"""
+            <div style="position:relative; display:flex; align-items:flex-start; justify-content:space-between;">
+                <div style="flex:0 0 auto;">{logo_html}</div>
+                <div style="position:absolute; left:0; right:0; top:0; text-align:center;">
+                    <span style="font-size:1.9rem; font-weight:700;">{titulo_escapado}</span>
+                </div>
+                <div style="flex:0 0 auto;">{mascote_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         render_kpis(df)
 
 
