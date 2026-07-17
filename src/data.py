@@ -262,10 +262,12 @@ def compute_kpis(df: pd.DataFrame) -> dict:
     total = len(df)
     com_saida = df["no_prazo_saida"].sum() + df["fora_prazo_saida"].sum()
     com_chegada = df["no_prazo_chegada"].sum() + df["fora_prazo_chegada"].sum()
+    com_transit = df["no_prazo_transit"].sum() + df["fora_prazo_transit"].sum()
     return {
         "total_viagens": total,
         "pct_no_prazo_saida": (df["no_prazo_saida"].sum() / com_saida * 100) if com_saida else 0.0,
         "pct_no_prazo_chegada": (df["no_prazo_chegada"].sum() / com_chegada * 100) if com_chegada else 0.0,
+        "pct_no_prazo_transit": (df["no_prazo_transit"].sum() / com_transit * 100) if com_transit else 0.0,
         "qtd_fora_prazo_chegada": int(df["fora_prazo_chegada"].sum()),
         "valor_total_multa": float(df["valor_multa"].sum(skipna=True)) if "valor_multa" in df else 0.0,
         "km_total": float(df["km"].sum(skipna=True)) if "km" in df else 0.0,

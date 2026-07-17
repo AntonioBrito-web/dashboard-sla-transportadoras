@@ -285,6 +285,25 @@ def _inject_header_css(key: str) -> None:
     )
 
 
+def _inject_kpi_card_css() -> None:
+    # Cada número do hero (Viagens, No prazo etc.) ganha uma caixa translúcida
+    # branca sobre o vermelho de marca — "vidro fosco" em vez de texto solto
+    # flutuando no fundo vermelho. Fica dentro de .st-key-app-hero, então já
+    # herda o "color: #ffffff !important" de _inject_header_css, não precisa
+    # repetir aqui.
+    st.markdown(
+        """<style>
+        div[class*="st-key-kpi_card_"] {
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            border-radius: 12px;
+            padding: 0.6rem 1rem 0.3rem 1rem;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_header() -> None:
     if not LOGO_PATH.exists() and not MASCOTE_PATH.exists():
         return
@@ -440,12 +459,20 @@ def trocar_senha_obrigatoria_screen(user: dict) -> None:
 
 def render_kpis(df: pd.DataFrame) -> None:
     kpis = compute_kpis(df)
-    cols = st.columns(5)
-    cols[0].metric("Viagens", f"{kpis['total_viagens']:,}".replace(",", "."))
-    cols[1].metric("No prazo (saída)", f"{kpis['pct_no_prazo_saida']:.1f}%")
-    cols[2].metric("No prazo (chegada)", f"{kpis['pct_no_prazo_chegada']:.1f}%")
-    cols[3].metric("Fora do prazo (chegada)", f"{kpis['qtd_fora_prazo_chegada']:,}".replace(",", "."))
-    cols[4].metric("KM total", f"{kpis['km_total']:,.0f}".replace(",", "."))
+    _inject_kpi_card_css()
+    itens = [
+        ("Viagens", f"{kpis['total_viagens']:,}".replace(",", ".")),
+        ("No prazo (saída)", f"{kpis['pct_no_prazo_saida']:.1f}%"),
+        ("No prazo (chegada)", f"{kpis['pct_no_prazo_chegada']:.1f}%"),
+        ("No prazo (transit time)", f"{kpis['pct_no_prazo_transit']:.1f}%"),
+        ("Fora do prazo (chegada)", f"{kpis['qtd_fora_prazo_chegada']:,}".replace(",", ".")),
+        ("KM total", f"{kpis['km_total']:,.0f}".replace(",", ".")),
+    ]
+    cols = st.columns(len(itens))
+    for i, (col, (rotulo, valor)) in enumerate(zip(cols, itens)):
+        with col:
+            with st.container(key=f"kpi_card_{i}"):
+                st.metric(rotulo, valor)
 
 
 def render_monthly_chart(df: pd.DataFrame, colors: dict) -> None:
@@ -1530,25 +1557,9 @@ def verificar_notificar_prazo_justificativa(df: pd.DataFrame, hoje: date | None 
         print(f"[notificacao] Falha ao verificar/enviar notificacoes de prazo: {e}", flush=True)
 
 
-def injetar_css_cards(colors: dict, modo: str) -> None:
-    # Cada gráfico/tabela ganha uma moldura tipo "card" (fundo levemente
-    # destacado, cantos arredondados, sombra sutil) em vez do traço reto
-    # que o border=True padrão do Streamlit desenha — st.container(key=...)
-    # vira uma classe CSS "st-key-<key>" (documentado), então dá pra mirar
-    # só nos containers marcados com o prefixo "card_" sem depender de
-    # nenhum data-testid interno do Streamlit que pode mudar de versão
-    # pra versão. O container principal (stAppViewBlockContainer) recebe o
-    # mesmo tratamento pra virar um "card de fundo" atrás de tudo, dando
-    # sensação de amplitude ao dashboard inteiro.
-    #
-    # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
-    # outros lados) — grafite no escuro, cinza claro no claro — pra dar
-    # profundidade sem ficar com um halo ao redor do card inteiro.
-    sombra_cor = "rgba(30, 29, 28, 0.55)" if modo == "dark" else "rgba(176, 172, 166, 0.5)"
+def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
     sombra = f"6px 6px 14px 0 {sombra_cor}"
-    st.markdown(
-        f"""
-        <style>
+    return f"""
         [data-testid="stAppViewBlockContainer"], .main .block-container {{
             background: {colors["surface"]};
             border-radius: 20px;
@@ -1562,6 +1573,36 @@ def injetar_css_cards(colors: dict, modo: str) -> None:
             border-radius: 14px;
             padding: 1rem 1.25rem 0.5rem 1.25rem;
             box-shadow: {sombra};
+        }}
+    """
+
+
+def injetar_css_cards() -> None:
+    # Cada gráfico/tabela ganha uma moldura tipo "card" (fundo levemente
+    # destacado, cantos arredondados, sombra sutil) em vez do traço reto
+    # que o border=True padrão do Streamlit desenha — st.container(key=...)
+    # vira uma classe CSS "st-key-<key>" (documentado), então dá pra mirar
+    # só nos containers marcados com o prefixo "card_" sem depender de
+    # nenhum data-testid interno do Streamlit que pode mudar de versão
+    # pra versão. O container principal (stAppViewBlockContainer) recebe o
+    # mesmo tratamento pra virar um "card de fundo" atrás de tudo, dando
+    # sensação de amplitude ao dashboard inteiro.
+    #
+    # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
+    # outros lados) — grafite no escuro, cinza claro no claro. O modo NÃO
+    # vem do seletor "Aparência dos gráficos" da lateral (esse é manual e
+    # só ajusta as cores dos gráficos, tem gente que nunca mexe nele) — o
+    # bloco claro é o padrão e o escuro entra via
+    # @media (prefers-color-scheme: dark), que reflete o tema real do
+    # navegador/sistema (e do próprio tema do Streamlit na prática, já
+    # que a esmagadora maioria usa "Use system setting"), então funciona
+    # sozinho tanto no escuro escolhido manualmente quanto no automático.
+    st.markdown(
+        f"""
+        <style>
+        {_bloco_css_cards(chart_colors("light"), "rgba(150, 146, 140, 0.55)")}
+        @media (prefers-color-scheme: dark) {{
+            {_bloco_css_cards(chart_colors("dark"), "rgba(0, 0, 0, 0.75)")}
         }}
         </style>
         """,
@@ -1585,7 +1626,7 @@ def dashboard_screen(user: dict) -> None:
 
     modo_tema = get_theme_mode()
     colors = chart_colors(modo_tema)
-    injetar_css_cards(colors, modo_tema)
+    injetar_css_cards()
 
     if user["role"] in ("admin", "interno"):
         mapa_abrev = transportadora_abreviatura_map(df)
