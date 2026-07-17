@@ -1181,6 +1181,59 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
             render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit")
 
 
+def _paginar(df: pd.DataFrame, key: str, linhas_por_pagina: int = 100) -> pd.DataFrame:
+    total = len(df)
+    if total <= linhas_por_pagina:
+        return df
+    total_paginas = -(-total // linhas_por_pagina)  # ceil division
+    pagina = st.number_input(
+        f"Página (1 a {total_paginas} — {total} linhas no total)",
+        min_value=1,
+        max_value=total_paginas,
+        value=1,
+        step=1,
+        key=key,
+    )
+    inicio = (pagina - 1) * linhas_por_pagina
+    return df.iloc[inicio : inicio + linhas_por_pagina]
+
+
+def _tabela_html(df: pd.DataFrame, colors: dict, formatadores: dict | None = None) -> str:
+    # st.dataframe/data_editor desenham em canvas (glide-data-grid) — não
+    # tem texto de verdade no DOM pra estilizar, então não dá pra deixar o
+    # cabeçalho branco/negrito por ali. Essa tabela HTML própria é usada só
+    # nas tabelas puramente de exibição (sem seleção de linha/edição), onde
+    # dá pra abrir mão do grid nativo em troca de controle total do CSS.
+    formatadores = formatadores or {}
+    colunas = list(df.columns)
+    linhas_html = []
+    for _, linha in df.iterrows():
+        celulas = []
+        for col in colunas:
+            valor = linha[col]
+            if col in formatadores:
+                texto = formatadores[col](valor)
+            else:
+                texto = "" if pd.isna(valor) else str(valor)
+            celulas.append(
+                f'<td style="padding:0.4rem 0.75rem; border-bottom:1px solid {colors["gridline"]}; '
+                f'color:{colors["ink_primary"]}; white-space:nowrap;">{html_lib.escape(texto)}</td>'
+            )
+        linhas_html.append(f"<tr>{''.join(celulas)}</tr>")
+    cabecalho = "".join(
+        f'<th style="padding:0.55rem 0.75rem; background-color:{BRAND_RED}; color:#ffffff; '
+        f'font-weight:700; text-align:left; white-space:nowrap; position:sticky; top:0;">'
+        f"{html_lib.escape(str(col))}</th>"
+        for col in colunas
+    )
+    return (
+        '<div style="overflow-x:auto; max-height:420px; overflow-y:auto; border-radius:8px;">'
+        f'<table style="width:100%; border-collapse:collapse; font-size:0.85rem;">'
+        f"<thead><tr>{cabecalho}</tr></thead><tbody>{''.join(linhas_html)}</tbody>"
+        "</table></div>"
+    )
+
+
 def render_table(df: pd.DataFrame) -> None:
     exibir = df[
         ["data", "id_viagem", "status", "abreviatura", "motorista", "placa", "origem", "destino", "regional"]
@@ -1204,12 +1257,16 @@ def render_table(df: pd.DataFrame) -> None:
             "no_prazo_transit": "Transit time",
         }
     )
-    st.dataframe(
-        exibir.sort_values("Data", ascending=False),
-        width="stretch",
-        hide_index=True,
-        height=400,
-        column_config={"Data": st.column_config.DateColumn(format="DD/MM/YYYY")},
+    exibir = exibir.sort_values("Data", ascending=False)
+    pagina = _paginar(exibir, key="pagina_viagens")
+    colors = chart_colors(_detectar_tema())
+    st.markdown(
+        _tabela_html(
+            pagina,
+            colors,
+            formatadores={"Data": lambda v: v.strftime("%d/%m/%Y") if pd.notna(v) else ""},
+        ),
+        unsafe_allow_html=True,
     )
 
 
@@ -1220,12 +1277,11 @@ def render_motoristas_ofensores(df: pd.DataFrame) -> None:
         return
     tabela = tabela.copy()
     tabela["Quantidade"] = tabela["Quantidade"].astype(int)
-    st.dataframe(
-        tabela,
-        width="stretch",
-        hide_index=True,
-        height=350,
-        column_config={"Quantidade": st.column_config.NumberColumn(format="%d")},
+    pagina = _paginar(tabela, key="pagina_motoristas")
+    colors = chart_colors(_detectar_tema())
+    st.markdown(
+        _tabela_html(pagina, colors, formatadores={"Quantidade": lambda v: str(int(v))}),
+        unsafe_allow_html=True,
     )
 
 

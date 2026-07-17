@@ -1,21 +1,15 @@
 [theme]
 base = "light"
 primaryColor = "#ED2024"
+dataframeHeaderBackgroundColor = "#ED2024"
 font = "Montserrat:https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300..900;1,300..900&display=swap"
 
 [theme.light]
 backgroundColor = "#fcfcfb"
 secondaryBackgroundColor = "#D8D2D2"
 textColor = "#0b0b0b"
-# textColor no claro é quase preto — cabeçalho vermelho puro (#ED2024)
-# deixava esse texto ilegível. Um tom claro/rosado ainda lembra a marca
-# e contrasta bem com texto escuro.
-dataframeHeaderBackgroundColor = "#f4c2c3"
 
 [theme.dark]
 backgroundColor = "#1a1a19"
 secondaryBackgroundColor = "#0d0d0d"
 textColor = "#ffffff"
-# No escuro o texto é branco, então um vermelho mais profundo (não o
-# vermelho de marca puro, que fica claro demais) dá bastante contraste.
-dataframeHeaderBackgroundColor = "#b81c1f"
