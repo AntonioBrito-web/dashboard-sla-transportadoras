@@ -1721,6 +1721,36 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         [data-testid="stSidebar"] * {{
             color: {colors["ink_primary"]} !important;
         }}
+        /* Widgets nativos (input, selectbox, multiselect, botão
+        secundário, expander) têm o próprio "miolo" pintado pelo BaseWeb
+        (a lib de componentes por baixo do Streamlit), separado do
+        fundo/texto genérico acima — por isso continuavam pretos mesmo
+        com a página já clara. As tags coloridas dentro do multiselect
+        (vermelhas, de propósito) não são tocadas aqui. O menu-popover do
+        selectbox/multiselect é renderizado fora da hierarquia normal
+        (direto num portal no body), então precisa de regra própria. */
+        [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
+        [data-testid="stNumberInput"] input, [data-baseweb="select"] > div,
+        [data-baseweb="input"] {{
+            background-color: {colors["surface"]} !important;
+            color: {colors["ink_primary"]} !important;
+        }}
+        [data-testid="stBaseButton-secondary"], [data-testid="baseButton-secondary"],
+        [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button {{
+            background-color: {colors["surface"]} !important;
+            color: {colors["ink_primary"]} !important;
+            border-color: {colors["gridline"]} !important;
+        }}
+        [data-testid="stExpander"] {{
+            background-color: {colors["surface"]} !important;
+            border-color: {colors["gridline"]} !important;
+        }}
+        [data-baseweb="popover"] [data-baseweb="menu"], [data-baseweb="menu"] {{
+            background-color: {colors["surface"]} !important;
+        }}
+        [data-baseweb="menu"] li {{
+            color: {colors["ink_primary"]} !important;
+        }}
         [data-testid="stAppViewBlockContainer"], .main .block-container {{
             background: {colors["surface"]};
             border-radius: 20px;
