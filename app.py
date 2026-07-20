@@ -1759,8 +1759,18 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         selectbox/multiselect é renderizado fora da hierarquia normal
         (direto num portal no body), então precisa de regra própria. */
         [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
-        [data-testid="stNumberInput"] input, [data-baseweb="select"] div,
-        [data-baseweb="input"], [data-baseweb="base-input"] {{
+        [data-testid="stNumberInput"] input, [data-baseweb="input"], [data-baseweb="base-input"],
+        [data-testid="stWidgetLabel"] {{
+            background-color: {colors["surface"]} !important;
+            color: {colors["ink_primary"]} !important;
+        }}
+        /* O seletor anterior (só "div") não bastava: o BaseWeb pinta o
+        "miolo" do select em várias camadas de div/span aninhadas, e uma
+        delas ficava com o preto padrão por baixo do nosso override — texto
+        e caixa ficavam pretos sobre preto, ilegíveis. Pega TODO descendente
+        do select, exceto as tags coloridas do multiselect (regra própria
+        logo abaixo, com cor fixa vermelha de propósito). */
+        [data-baseweb="select"], [data-baseweb="select"] *:not([data-baseweb="tag"]):not([data-baseweb="tag"] *) {{
             background-color: {colors["surface"]} !important;
             color: {colors["ink_primary"]} !important;
         }}
@@ -1790,8 +1800,12 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         e dando um respiro extra à esquerda, sem mexer na cor (que já é
         vermelha de propósito). */
         [data-baseweb="tag"] {{
+            background-color: {BRAND_RED} !important;
             overflow: visible !important;
             padding-left: 8px !important;
+        }}
+        [data-baseweb="tag"], [data-baseweb="tag"] * {{
+            color: #ffffff !important;
         }}
         [data-baseweb="tag"] span {{
             overflow: visible !important;
