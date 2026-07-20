@@ -246,7 +246,7 @@ def _imagem_base64(caminho: str) -> str:
     return base64.b64encode(Path(caminho).read_bytes()).decode("ascii")
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Carregando dados da planilha...")
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Carregando Dashboard SLA...")
 def load_data() -> pd.DataFrame:
     raw = fetch_raw_dataframe()
     return clean_dataframe(raw)
@@ -1701,6 +1701,15 @@ def verificar_notificar_prazo_justificativa(df: pd.DataFrame, hoje: date | None 
 def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
     sombra = f"6px 6px 14px 0 {sombra_cor}"
     return f"""
+        [data-testid="stAppViewContainer"], .stApp {{
+            background: {colors["surface"]};
+        }}
+        [data-testid="stSidebar"] {{
+            background: {colors["surface"]};
+        }}
+        [data-testid="stSidebar"] * {{
+            color: {colors["ink_primary"]} !important;
+        }}
         [data-testid="stAppViewBlockContainer"], .main .block-container {{
             background: {colors["surface"]};
             border-radius: 20px;
