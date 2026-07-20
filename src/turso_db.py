@@ -320,7 +320,7 @@ def get_justificativas(chaves: list[str]) -> dict:
     placeholders = ",".join("?" for _ in chaves)
     resultado = _executar(
         f"SELECT chave_viagem, justificativa, anexo_nome, "
-        f"status_aprovacao, categoria, atualizado_em FROM justificativas WHERE chave_viagem IN ({placeholders})",
+        f"status_aprovacao, categoria, atualizado_em, observacao FROM justificativas WHERE chave_viagem IN ({placeholders})",
         chaves,
     )
     base = {
@@ -330,6 +330,7 @@ def get_justificativas(chaves: list[str]) -> dict:
             "status_aprovacao": r[3] or "pendente",
             "categoria": r[4] or "",
             "atualizado_em": r[5] or "",
+            "observacao": r[6] or "",
         }
         for r in resultado["linhas"]
     }
@@ -342,6 +343,7 @@ def get_justificativas(chaves: list[str]) -> dict:
                 "status_aprovacao": "pendente",
                 "categoria": "",
                 "atualizado_em": "",
+                "observacao": "",
             },
         )
         base[chave]["qtd_anexos"] = qtd

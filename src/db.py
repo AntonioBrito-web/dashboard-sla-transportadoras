@@ -4,9 +4,8 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
 
 CATEGORIAS_APROVACAO = [
-    "Atraso Transp 运输公司",
-    "Atraso Incontrolável 不可控因素",
-    "Atraso Operações 运营 SC/DC",
+    "Atraso Transportadora",
+    "Atraso desconsiderado",
 ]
 
 

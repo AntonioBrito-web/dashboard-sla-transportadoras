@@ -2,8 +2,9 @@ import re
 import urllib.parse
 
 import pandas as pd
+import streamlit as st
 
-from src.config import CSV_URL, MESES_PT, SHEET_ID
+from src.config import CACHE_TTL_SECONDS, CSV_URL, MESES_PT, SHEET_ID
 
 _CJK_PATTERN = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿＀-￯]+")
 
@@ -106,7 +107,13 @@ def _eh_responsabilidade_transportadora(serie: pd.Series) -> pd.Series:
     return serie.astype(str).str.strip().str.lower().str.startswith("transp")
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_saida_real_dataframe() -> pd.DataFrame:
+    # Sem cache aqui, cada detalhe_categoria(df, "saida") refazia esse
+    # download inteiro do Google Sheets do zero — e isso é chamado várias
+    # vezes por render (motoristas ofensores, resumo por transportadora,
+    # tabelas fixas), então uma única passada do dashboard baixava a
+    # planilha "Saída real" 3x+ sem necessidade nenhuma.
     url = (
         f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet="
         + urllib.parse.quote(SHEET_SAIDA_REAL)

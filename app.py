@@ -260,22 +260,23 @@ def _detectar_tema() -> str:
     return detectado if detectado in ("light", "dark") else "light"
 
 
-def get_theme_mode() -> str:
-    # st.context.theme.type é documentado pelo próprio Streamlit como não
-    # totalmente confiável logo após uma troca de tema, então o valor
-    # detectado só define o padrão inicial do seletor abaixo — ele nasce
-    # sincronizado com o tema real (claro/escuro/sistema), e o usuário pode
-    # corrigir manualmente se a detecção errar em algum caso.
-    opcoes = ["Claro", "Escuro"]
-    indice_padrao = 1 if _detectar_tema() == "dark" else 0
-    escolha = st.sidebar.radio(
-        "Aparência dos gráficos", opcoes, index=indice_padrao, horizontal=True, key="tema_graficos"
-    )
-    st.sidebar.caption(
-        "Ajusta só as cores dos gráficos. Para trocar o tema geral do app, "
-        "use o menu ⋮ (canto superior direito) → Settings → Theme."
-    )
-    return "dark" if escolha == "Escuro" else "light"
+def render_theme_toggle() -> str:
+    # Botão único no topo do conteúdo principal (não na lateral) pra
+    # alternar claro/escuro — controla tanto as cores dos gráficos quanto
+    # os cards. No primeiro acesso da sessão (sem escolha manual ainda),
+    # respeita o tema do sistema/navegador via _detectar_tema(); a partir
+    # do primeiro clique, o valor escolhido manda pro resto da sessão —
+    # não muda mais sozinho, mesmo que o tema do sistema mude depois.
+    if "tema_modo" not in st.session_state:
+        st.session_state["tema_modo"] = _detectar_tema()
+    modo_atual = st.session_state["tema_modo"]
+    icone = "☀️" if modo_atual == "light" else "🌙"
+    _, col_botao = st.columns([30, 1])
+    with col_botao:
+        if st.button(icone, key="botao_tema", help="Alternar entre tema claro e escuro"):
+            st.session_state["tema_modo"] = "dark" if modo_atual == "light" else "light"
+            st.rerun()
+    return st.session_state["tema_modo"]
 
 
 def _inject_header_css(key: str) -> None:
@@ -697,6 +698,12 @@ def render_tabela_detalhe(
     detalhe["_status"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
     )
+    detalhe["Categoria"] = detalhe["chave_viagem"].map(
+        lambda k: justificativas.get(k, {}).get("categoria", "")
+    )
+    detalhe["Observação"] = detalhe["chave_viagem"].map(
+        lambda k: justificativas.get(k, {}).get("observacao", "")
+    )
 
     pode_editar = user["role"] == "transportadora"
     pode_aprovar = user["role"] == "admin"
@@ -709,6 +716,10 @@ def render_tabela_detalhe(
     if ve_como_admin:
         detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
         colunas_exibir = colunas_exibir + ["Decisão"]
+    # Categoria/Observação são preenchidas só pelo popup de aprovação, mas
+    # ficam visíveis pra todo mundo (inclusive a transportadora) — é o
+    # registro de qual foi a decisão e o motivo, não só um controle interno.
+    colunas_exibir = colunas_exibir + ["Categoria", "Observação"]
 
     if pode_editar:
         # A Justificativa não é mais editável direto na tabela — escrever e
@@ -907,6 +918,9 @@ def render_tabela_detalhe(
                 except Exception as e:
                     st.error(f"Falha ao reprovar: {e}")
                 else:
+                    _notificar_decisao_justificativa(
+                        detalhe.loc[idx, "transportadora"], detalhe.loc[idx, "ID Viagem"], "reprovada"
+                    )
                     st.warning(f"Justificativa de {detalhe.loc[idx, 'ID Viagem']} reprovada.", icon="🚫")
                     st.rerun()
             elif decisao_nova == "Aprovado":
@@ -939,6 +953,13 @@ def render_tabela_detalhe(
                 except Exception as e:
                     st.error(f"Falha ao aprovar: {e}")
                 else:
+                    _notificar_decisao_justificativa(
+                        detalhe.loc[idx, "transportadora"],
+                        detalhe.loc[idx, "ID Viagem"],
+                        "aprovada",
+                        categoria,
+                        observacao.strip(),
+                    )
                     st.session_state.pop(f"aprovando_{chave_id}", None)
                     st.success("Justificativa aprovada.", icon="✅")
                     st.rerun()
@@ -968,6 +989,25 @@ def render_tabela_detalhe(
             if col_cancela.button("Cancelar", key=f"excluir_cancela_{key_sufixo}_{chave_id}"):
                 st.session_state.pop(f"excluindo_{chave_id}", None)
                 st.rerun()
+
+
+def _notificar_decisao_justificativa(
+    transportadora: str, id_viagem: str, decisao: str, categoria: str = "", observacao: str = ""
+) -> None:
+    try:
+        emails = {u["transportadora"]: u["email"] for u in list_transportadora_users() if u.get("email")}
+        destino = emails.get(transportadora)
+        if not destino:
+            return
+        linhas = [f"A justificativa da viagem {id_viagem} foi {decisao}."]
+        if categoria:
+            linhas.append(f"Categoria: {categoria}")
+        if observacao:
+            linhas.append(f"Observação: {observacao}")
+        linhas.append("Acesse o Dashboard SLA Transportadoras para mais detalhes.")
+        enviar_email(destino, f"[Dashboard SLA] Justificativa {decisao} — {id_viagem}", "\n\n".join(linhas))
+    except Exception as e:
+        print(f"[notificacao] Falha ao notificar decisão pra {transportadora}: {e}", flush=True)
 
 
 def render_notificacao_reprovacao(user: dict) -> None:
@@ -1323,6 +1363,7 @@ def render_gerenciar_senhas() -> None:
         )
         if st.button("Salvar e-mail", key="salvar_email_transp_botao"):
             if definir_email(usuario_selecionado["username"], novo_email):
+                st.session_state.pop(f"email_transp_{usuario_selecionado['username']}", None)
                 st.success("E-mail atualizado.")
                 st.rerun()
             else:
@@ -1396,6 +1437,7 @@ def render_gerenciar_acessos_internos() -> None:
             )
             if st.button("Salvar e-mail", key="salvar_email_interno_botao"):
                 if definir_email(usuario_selecionado["username"], novo_email):
+                    st.session_state.pop(f"email_interno_{usuario_selecionado['username']}", None)
                     st.success("E-mail atualizado.")
                     st.rerun()
                 else:
@@ -1426,6 +1468,12 @@ def render_gerenciar_acessos_internos() -> None:
                         f"Conta criada — usuário: `{registro['usuario']}` — senha: `{registro['senha']}`"
                     )
                     st.caption("Copie agora — essa senha não fica salva em nenhuma tela depois de sair daqui.")
+                    # Sem rerun aqui de propósito: a senha só aparece essa
+                    # vez, então o admin precisa de tempo pra copiar antes
+                    # da tela atualizar. O formulário limpa na próxima
+                    # interação (o pop já deixa isso preparado).
+                    for chave in ("novo_interno_nome", "novo_interno_email", "novo_interno_role"):
+                        st.session_state.pop(chave, None)
 
 
 def render_alterar_perfil(user: dict) -> None:
@@ -1540,7 +1588,9 @@ def render_alterar_senha(user: dict) -> None:
                     st.rerun()
             return
         st.caption("Por segurança, confirme o e-mail cadastrado nesta conta.")
-        email_confirma = st.text_input("E-mail cadastrado", key="chsenha_email")
+        email_confirma = st.text_input(
+            "E-mail cadastrado", value=(user.get("email") or "").strip(), key="chsenha_email"
+        )
         senha_atual = st.text_input("Senha atual", type="password", key="chsenha_atual")
         nova = st.text_input("Nova senha", type="password", key="chsenha_nova")
         confirma = st.text_input("Confirmar nova senha", type="password", key="chsenha_confirma")
@@ -1555,7 +1605,10 @@ def render_alterar_senha(user: dict) -> None:
                 st.error("Nova senha deve ter pelo menos 6 caracteres.")
             else:
                 set_password(user["username"], nova, deve_trocar_senha=False)
+                for chave in ("chsenha_email", "chsenha_atual", "chsenha_nova", "chsenha_confirma"):
+                    st.session_state.pop(chave, None)
                 st.success("Senha alterada com sucesso! Use a nova senha no próximo login.")
+                st.rerun()
 
 
 def _ultimo_dia_mes(ano: int, mes: int) -> int:
@@ -1679,9 +1732,9 @@ def injetar_css_cards(modo: str) -> None:
     #
     # Sombra sempre projetada só pra baixo e pra direita (sem blur nos
     # outros lados) — grafite no escuro, cinza claro no claro. O modo vem
-    # do MESMO seletor manual "Aparência dos gráficos" da lateral usado
-    # pras cores dos gráficos (get_theme_mode()), não de detecção
-    # automática. Já tentei duas formas de detectar sozinho e as duas
+    # do MESMO botão de tema do topo (render_theme_toggle()) usado pras
+    # cores dos gráficos, não de detecção automática isolada. Já tentei
+    # duas formas de detectar sozinho e as duas
     # falham pro mesmo motivo: trocar o tema pelo menu nativo do
     # Streamlit (⋮ → Light/Dark/System) é uma ação só do lado do
     # navegador — não dispara rerun do script — então nem
@@ -1701,6 +1754,8 @@ def dashboard_screen(user: dict) -> None:
     df = load_data()
     verificar_notificar_prazo_justificativa(df)
 
+    modo_tema = render_theme_toggle()
+
     st.sidebar.title("Dashboard SLA")
     st.sidebar.caption(f"Usuário: {user['username']} ({user['role']})")
 
@@ -1711,7 +1766,6 @@ def dashboard_screen(user: dict) -> None:
 
     render_alterar_senha(user)
 
-    modo_tema = get_theme_mode()
     colors = chart_colors(modo_tema)
     injetar_css_cards(modo_tema)
 
