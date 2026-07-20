@@ -32,6 +32,12 @@ CHROME = {
         "gridline": SECONDARY_GRAY,
         "categorical": CATEGORICAL_LIGHT,
         "cor_secundaria": SECONDARY_GRAY,
+        # Mesmo tom de secondaryBackgroundColor do config.toml — a sidebar
+        # nativa do Streamlit usa essa cor pra se diferenciar do fundo
+        # principal (backgroundColor); reaproveitado aqui pra manter essa
+        # mesma separação visual quando a sidebar é recolorida pelo botão
+        # de tema.
+        "sidebar_bg": "#D8D2D2",
     },
     "dark": {
         "surface": "#1a1a19",
@@ -41,6 +47,7 @@ CHROME = {
         "gridline": "#2c2c2a",
         "categorical": CATEGORICAL_DARK,
         "cor_secundaria": SECONDARY_GRAY,
+        "sidebar_bg": "#0d0d0d",
     },
 }
 

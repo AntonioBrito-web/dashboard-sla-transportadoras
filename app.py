@@ -1267,7 +1267,7 @@ def _tabela_html(df: pd.DataFrame, colors: dict, formatadores: dict | None = Non
         for col in colunas
     )
     return (
-        '<div style="overflow-x:auto; max-height:420px; overflow-y:auto; border-radius:8px;">'
+        '<div class="tabela-scroll" style="overflow-x:auto; max-height:420px; overflow-y:auto; border-radius:8px;">'
         f'<table style="width:100%; border-collapse:collapse; font-size:0.85rem;">'
         f"<thead><tr>{cabecalho}</tr></thead><tbody>{''.join(linhas_html)}</tbody>"
         "</table></div>"
@@ -1704,8 +1704,19 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         [data-testid="stAppViewContainer"], .stApp {{
             background: {colors["surface"]};
         }}
+        /* Texto do conteúdo principal segue o mesmo tema do botão — sem
+        isso, títulos/rótulos ficavam com a cor de texto NATIVA do
+        Streamlit (que segue o tema real do navegador/config.toml, não
+        esse botão), e se os dois divergissem (ex.: botão em "claro" com
+        o Streamlit nativo escuro) o texto ficava branco sobre fundo
+        branco — ilegível. .st-key-app-hero (declarado depois, mais
+        abaixo) continua sobrepondo com branco fixo dentro do hero. */
+        [data-testid="stAppViewContainer"] * {{
+            color: {colors["ink_primary"]} !important;
+        }}
         [data-testid="stSidebar"] {{
-            background: {colors["surface"]};
+            background: {colors["sidebar_bg"]};
+            border-right: 1px solid {colors["gridline"]};
         }}
         [data-testid="stSidebar"] * {{
             color: {colors["ink_primary"]} !important;
@@ -1724,6 +1735,17 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
             padding: 1rem 1.25rem 0.5rem 1.25rem;
             box-shadow: {sombra};
             overflow: hidden;
+        }}
+        .tabela-scroll {{
+            scrollbar-color: {colors["ink_muted"]} transparent;
+        }}
+        .tabela-scroll::-webkit-scrollbar {{
+            width: 10px;
+            height: 10px;
+        }}
+        .tabela-scroll::-webkit-scrollbar-thumb {{
+            background: {colors["ink_muted"]};
+            border-radius: 6px;
         }}
     """
 
