@@ -262,13 +262,30 @@ def _detectar_tema() -> str:
 
 def render_theme_toggle() -> str:
     # Botão único no topo do conteúdo principal (não na lateral) pra
-    # alternar claro/escuro — controla tanto as cores dos gráficos quanto
-    # os cards. No primeiro acesso da sessão (sem escolha manual ainda),
-    # respeita o tema do sistema/navegador via _detectar_tema(); a partir
-    # do primeiro clique, o valor escolhido manda pro resto da sessão —
-    # não muda mais sozinho, mesmo que o tema do sistema mude depois.
+    # alternar claro/escuro — controla as cores dos gráficos e os cards
+    # (o que dá pra alcançar via CSS). O tema NATIVO do Streamlit (menu
+    # ⋮ → System/Light/Dark) continua funcionando à parte, e é a ÚNICA
+    # forma de recolorir widgets em canvas (Ranking de transportadoras,
+    # as 3 tabelas Detalhe atraso) — CSS não alcança canvas, então esse
+    # botão nunca vai mudar essas tabelas, só o menu nativo consegue.
+    #
+    # Pra esse botão não ficar "preso" numa escolha antiga depois que o
+    # usuário troca pelo menu nativo (o que deixava os widgets de canvas
+    # atualizados mas o resto da página presa no tema antigo, com metade
+    # da tela num tema e metade no outro): a cada rerun, comparamos a
+    # leitura atual de _detectar_tema() com a última leitura registrada.
+    # Se mudou, é sinal de que o menu nativo foi usado nesse meio tempo —
+    # sincroniza o botão com essa mudança real. Um clique NESTE botão só
+    # atualiza "tema_modo" (não "tema_ultimo_detectado"), então continua
+    # valendo até o tema nativo de fato mudar de novo.
+    detectado_agora = _detectar_tema()
     if "tema_modo" not in st.session_state:
-        st.session_state["tema_modo"] = _detectar_tema()
+        st.session_state["tema_modo"] = detectado_agora
+        st.session_state["tema_ultimo_detectado"] = detectado_agora
+    elif detectado_agora != st.session_state.get("tema_ultimo_detectado"):
+        st.session_state["tema_modo"] = detectado_agora
+        st.session_state["tema_ultimo_detectado"] = detectado_agora
+
     modo_atual = st.session_state["tema_modo"]
     icone = "☀️" if modo_atual == "light" else "🌙"
     _, col_botao = st.columns([30, 1])
