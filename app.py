@@ -1770,6 +1770,22 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         [data-baseweb="menu"] li {{
             color: {colors["ink_primary"]} !important;
         }}
+        /* As tags coloridas do multiselect (Ano/Mês/Quinzena/Regional/
+        Origem/Destino) cortavam a 1ª letra do texto — a pílula tem
+        largura/padding calculados pelo BaseWeb pra caber a fonte padrão
+        do Streamlit; a fonte Montserrat (mais larga) do config.toml não
+        cabia direito na mesma caixa fixa. Corrigido soltando o overflow
+        e dando um respiro extra à esquerda, sem mexer na cor (que já é
+        vermelha de propósito). */
+        [data-baseweb="tag"] {{
+            overflow: visible !important;
+            padding-left: 8px !important;
+        }}
+        [data-baseweb="tag"] span {{
+            overflow: visible !important;
+            text-overflow: unset !important;
+            white-space: nowrap !important;
+        }}
         [data-testid="stAppViewBlockContainer"], .main .block-container {{
             background: {colors["surface"]};
             border-radius: 20px;
