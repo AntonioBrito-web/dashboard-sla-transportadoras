@@ -913,13 +913,23 @@ def render_tabela_detalhe(
                 # opção pela chave_viagem, não pela posição da linha, pra
                 # sobreviver a uma troca de filtro na lateral.
                 mapa_decisao = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa_admin}
+                # Rótulo mais completo (Data, ID Viagem, Seção da estrada —
+                # a única coluna de rota presente nas 3 categorias — e a
+                # decisão atual) pra dar pra casar a opção do selectbox com
+                # a linha certa na tabela acima, já que a tabela virou HTML
+                # e não tem mais seleção/realce de linha vinculado a este
+                # formulário.
+                def _rotulo_decisao(chave_v: str) -> str:
+                    linha = detalhe.loc[mapa_decisao[chave_v]]
+                    return (
+                        f"{formatar_data_br(linha['Data'])} — {linha['ID Viagem']} — "
+                        f"{linha['Seção da estrada']} — Decisão atual: {linha['Decisão']}"
+                    )
+
                 escolha_d_chave = st.selectbox(
                     "Viagem",
                     options=list(mapa_decisao.keys()),
-                    format_func=lambda chave_v: (
-                        f"{detalhe.loc[mapa_decisao[chave_v], 'ID Viagem']} — "
-                        f"{detalhe.loc[mapa_decisao[chave_v], 'Decisão']}"
-                    ),
+                    format_func=_rotulo_decisao,
                     key=f"decisao_sel_{key_sufixo}_{gen_decisao}",
                 )
                 idx_escolhido = mapa_decisao[escolha_d_chave]
