@@ -1730,13 +1730,15 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         selectbox/multiselect é renderizado fora da hierarquia normal
         (direto num portal no body), então precisa de regra própria. */
         [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea,
-        [data-testid="stNumberInput"] input, [data-baseweb="select"] > div,
-        [data-baseweb="input"] {{
+        [data-testid="stNumberInput"] input, [data-baseweb="select"] div,
+        [data-baseweb="input"], [data-baseweb="base-input"] {{
             background-color: {colors["surface"]} !important;
             color: {colors["ink_primary"]} !important;
         }}
         [data-testid="stBaseButton-secondary"], [data-testid="baseButton-secondary"],
-        [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button {{
+        [data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button,
+        [data-testid="stNumberInput"] button, [data-testid="stNumberInputStepDown"],
+        [data-testid="stNumberInputStepUp"] {{
             background-color: {colors["surface"]} !important;
             color: {colors["ink_primary"]} !important;
             border-color: {colors["gridline"]} !important;
