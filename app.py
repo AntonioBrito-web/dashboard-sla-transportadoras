@@ -21,6 +21,7 @@ from src.config import CACHE_TTL_SECONDS
 from src.data import (
     clean_dataframe,
     compute_kpis,
+    daily_sla,
     detalhe_categoria,
     fetch_raw_dataframe,
     load_transportadoras,
@@ -596,13 +597,25 @@ def render_kpis(df: pd.DataFrame) -> None:
                 st.metric(rotulo, valor)
 
 
-def render_monthly_chart(df: pd.DataFrame, colors: dict) -> None:
-    mensal = monthly_sla(df)
-    if mensal.empty:
-        st.info("Sem dados mensais suficientes para o período filtrado.")
+def render_monthly_chart(df: pd.DataFrame, colors: dict, granularidade: str = "mensal") -> None:
+    # Com um único mês selecionado na lateral, um gráfico "mensal" mostraria
+    # 1 ponto só — sem evolução nenhuma pra ver. Nesse caso troca pra
+    # granularidade diária (dia a dia dentro do mês); com 2+ meses
+    # selecionados, volta pro agregado mensal de sempre.
+    if granularidade == "diaria":
+        dados = daily_sla(df)
+        campo_x, titulo_x = "dia_str", "Dia"
+        mensagem_vazio = "Sem dados diários suficientes para o período filtrado."
+    else:
+        dados = monthly_sla(df)
+        campo_x, titulo_x = "mes_nome", "Mês"
+        mensagem_vazio = "Sem dados mensais suficientes para o período filtrado."
+
+    if dados.empty:
+        st.info(mensagem_vazio)
         return
-    melted = mensal.melt(
-        id_vars=["mes_nome"],
+    melted = dados.melt(
+        id_vars=[campo_x],
         value_vars=["pct_no_prazo_saida", "pct_no_prazo_chegada"],
         var_name="indicador",
         value_name="percentual",
@@ -612,8 +625,8 @@ def render_monthly_chart(df: pd.DataFrame, colors: dict) -> None:
     )
     ordem_indicador = ["No prazo chegada", "No prazo saída"]
 
-    ordem_mes = mensal["mes_nome"].tolist()
-    eixo_x = alt.X("mes_nome:N", sort=ordem_mes, title="Mês", axis=alt.Axis(domainColor=colors["gridline"], tickColor=colors["gridline"], labelColor=colors["ink_secondary"]))
+    ordem_x = dados[campo_x].tolist()
+    eixo_x = alt.X(f"{campo_x}:N", sort=ordem_x, title=titulo_x, axis=alt.Axis(domainColor=colors["gridline"], tickColor=colors["gridline"], labelColor=colors["ink_secondary"]))
 
     base = alt.Chart(melted)
     line = base.mark_line(point=True, strokeWidth=2).encode(
@@ -626,26 +639,31 @@ def render_monthly_chart(df: pd.DataFrame, colors: dict) -> None:
             "indicador:N", title="", sort=ordem_indicador,
             scale=alt.Scale(domain=ordem_indicador, range=[BRAND_RED, colors["cor_secundaria"]]),
         ),
-        tooltip=["mes_nome", "indicador", alt.Tooltip("percentual:Q", format=".1f")],
+        tooltip=[campo_x, "indicador", alt.Tooltip("percentual:Q", format=".1f")],
     )
-    labels_chegada = (
-        base.transform_filter(alt.datum.indicador == "No prazo chegada")
-        .mark_text(dy=14, fontSize=11, fontWeight="bold")
-        .encode(
-            x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
-            color=alt.value(colors["ink_primary"]),
+    camadas = [line]
+    # Rótulo numérico em cada ponto só faz sentido com poucos pontos (visão
+    # mensal, no máximo 12) — na diária (até ~31 pontos) viraria poluição
+    # visual, então essa granularidade fica só com a linha + tooltip.
+    if granularidade != "diaria":
+        camadas.append(
+            base.transform_filter(alt.datum.indicador == "No prazo chegada")
+            .mark_text(dy=14, fontSize=11, fontWeight="bold")
+            .encode(
+                x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
+                color=alt.value(colors["ink_primary"]),
+            )
         )
-    )
-    labels_saida = (
-        base.transform_filter(alt.datum.indicador == "No prazo saída")
-        .mark_text(dy=-12, fontSize=11, fontWeight="bold")
-        .encode(
-            x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
-            color=alt.value(colors["ink_primary"]),
+        camadas.append(
+            base.transform_filter(alt.datum.indicador == "No prazo saída")
+            .mark_text(dy=-12, fontSize=11, fontWeight="bold")
+            .encode(
+                x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
+                color=alt.value(colors["ink_primary"]),
+            )
         )
-    )
     chart = (
-        alt.layer(line, labels_chegada, labels_saida)
+        alt.layer(*camadas)
         .properties(height=320, background="transparent")
         .configure_view(strokeWidth=0)
         .configure_legend(labelColor=colors["ink_secondary"], titleColor=colors["ink_primary"])
@@ -2026,17 +2044,34 @@ def dashboard_screen(user: dict) -> None:
         df = df[df["transportadora"] == user["transportadora"]]
         titulo = user["transportadora"] or "Transportadora"
 
+    # Ano/Mês vêm pré-filtrados no mês atual (ano + mês de hoje) ao abrir o
+    # dashboard, em vez de todo o histórico — cai pro histórico completo só
+    # se o mês/ano atual não tiver nenhuma viagem nos dados (ex.: ambiente
+    # de teste com dados só de meses passados).
     anos_disponiveis = sorted(df["ano"].dropna().unique().tolist())
     if anos_disponiveis:
-        anos_selecionados = st.sidebar.multiselect("Ano", anos_disponiveis, default=anos_disponiveis)
+        ano_atual = datetime.now().year
+        default_anos = [ano_atual] if ano_atual in anos_disponiveis else anos_disponiveis
+        anos_selecionados = st.sidebar.multiselect("Ano", anos_disponiveis, default=default_anos)
         if anos_selecionados:
             df = df[df["ano"].isin(anos_selecionados)]
 
     meses_disponiveis = sorted(df["mes_nome"].dropna().unique().tolist(), key=lambda m: df.loc[df["mes_nome"] == m, "mes"].iloc[0])
+    meses_selecionados: list[str] = []
     if meses_disponiveis:
-        meses_selecionados = st.sidebar.multiselect("Mês", meses_disponiveis, default=meses_disponiveis)
+        mes_atual_num = datetime.now().month
+        mes_atual_nome = next(
+            (m for m in meses_disponiveis if df.loc[df["mes_nome"] == m, "mes"].iloc[0] == mes_atual_num),
+            None,
+        )
+        default_meses = [mes_atual_nome] if mes_atual_nome else meses_disponiveis
+        meses_selecionados = st.sidebar.multiselect("Mês", meses_disponiveis, default=default_meses)
         if meses_selecionados:
             df = df[df["mes_nome"].isin(meses_selecionados)]
+    # Gráfico "Evolução mensal do SLA": com 1 mês só selecionado, vira dia a
+    # dia (um único ponto mensal não mostraria evolução); com 2+, volta a
+    # ser mensal.
+    granularidade_evolucao = "diaria" if len(meses_selecionados) == 1 else "mensal"
 
     quinzenas_disponiveis = sorted(df["quinzena"].dropna().unique().tolist())
     if quinzenas_disponiveis:
@@ -2122,9 +2157,9 @@ def dashboard_screen(user: dict) -> None:
     ALTURA_PAR_GRAFICOS = 380
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Evolução mensal do SLA")
+        st.subheader("Evolução diária do SLA" if granularidade_evolucao == "diaria" else "Evolução mensal do SLA")
         with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_evolucao"):
-            render_monthly_chart(com_filtro_clique(df), colors)
+            render_monthly_chart(com_filtro_clique(df), colors, granularidade_evolucao)
     with col2:
         st.subheader("Principais motivos de atraso")
         with st.container(height=ALTURA_PAR_GRAFICOS, border=False, key="card_motivos"):

@@ -303,6 +303,33 @@ def monthly_sla(df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
+def daily_sla(df: pd.DataFrame) -> pd.DataFrame:
+    # Mesma lógica do monthly_sla, só que agrupado por dia — usado no
+    # gráfico "Evolução mensal do SLA" quando só 1 mês está selecionado
+    # (um único ponto mensal não mostra evolução nenhuma).
+    trabalho = df.dropna(subset=["data"]).copy()
+    trabalho["dia"] = trabalho["data"].dt.date
+    grouped = (
+        trabalho.groupby("dia", as_index=False)
+        .agg(
+            viagens=("id_viagem", "count"),
+            no_prazo_saida=("no_prazo_saida", "sum"),
+            fora_prazo_saida=("fora_prazo_saida", "sum"),
+            no_prazo_chegada=("no_prazo_chegada", "sum"),
+            fora_prazo_chegada=("fora_prazo_chegada", "sum"),
+        )
+        .sort_values("dia")
+    )
+    grouped["pct_no_prazo_saida"] = (
+        grouped["no_prazo_saida"] / (grouped["no_prazo_saida"] + grouped["fora_prazo_saida"]).replace(0, pd.NA) * 100
+    )
+    grouped["pct_no_prazo_chegada"] = (
+        grouped["no_prazo_chegada"] / (grouped["no_prazo_chegada"] + grouped["fora_prazo_chegada"]).replace(0, pd.NA) * 100
+    )
+    grouped["dia_str"] = grouped["dia"].map(lambda d: d.strftime("%d/%m"))
+    return grouped
+
+
 def transportadora_abreviatura_map(df: pd.DataFrame) -> dict:
     moda = (
         df.dropna(subset=["abreviatura"])
