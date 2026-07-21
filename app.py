@@ -260,6 +260,52 @@ def _detectar_tema() -> str:
     return detectado if detectado in ("light", "dark") else "light"
 
 
+def _sincronizar_tema_nativo(modo: str) -> None:
+    # Hack NÃO OFICIAL: o Streamlit não expõe nenhuma API (Python ou
+    # documentada) pra mudar o tema NATIVO por fora — só o menu ⋮ do
+    # próprio usuário faz isso, e é a única forma real de recolorir
+    # widgets em canvas (Ranking de transportadoras). Sem alternativa
+    # oficial, isso aqui simula o clique que um usuário faria: abre o menu
+    # nativo e clica no item "Light"/"Dark" dele, usando os data-testid
+    # internos (stMainMenu / stMainMenuItem-theme-Light|Dark) encontrados
+    # no bundle JS instalado do Streamlit (1.58.0). st.iframe roda o HTML
+    # num iframe same-origin, por isso window.parent.document alcança o
+    # DOM real da página. Isso é comportamento INTERNO não documentado e
+    # pode quebrar numa atualização futura do Streamlit — se o botão parar
+    # de re-colorir o Ranking, é o primeiro lugar a checar (inspecionar o
+    # DOM real em busca dos data-testid atuais).
+    rotulo = "Light" if modo == "light" else "Dark"
+    st.iframe(
+        f"""
+        <script>
+        (function() {{
+            const doc = window.parent.document;
+            function tentar(vezes) {{
+                const gatilho = doc.querySelector('button[data-testid="stMainMenu"]')
+                    || doc.querySelector('[data-testid="stMainMenu"] button')
+                    || doc.querySelector('[data-testid="stMainMenu"]');
+                if (!gatilho) {{
+                    if (vezes > 0) setTimeout(function() {{ tentar(vezes - 1); }}, 150);
+                    return;
+                }}
+                gatilho.click();
+                setTimeout(function() {{
+                    const item = doc.querySelector('[data-testid="stMainMenuItem-theme-{rotulo}"]');
+                    if (item) {{
+                        item.click();
+                    }} else {{
+                        gatilho.click();
+                    }}
+                }}, 200);
+            }}
+            tentar(15);
+        }})();
+        </script>
+        """,
+        height=1,
+    )
+
+
 def render_theme_toggle() -> str:
     # Botão único no topo do conteúdo principal (não na lateral) pra
     # alternar claro/escuro — controla as cores dos gráficos e os cards
@@ -291,8 +337,19 @@ def render_theme_toggle() -> str:
     _, col_botao = st.columns([30, 1])
     with col_botao:
         if st.button(icone, key="botao_tema", help="Alternar entre tema claro e escuro"):
-            st.session_state["tema_modo"] = "dark" if modo_atual == "light" else "light"
+            novo_modo = "dark" if modo_atual == "light" else "light"
+            st.session_state["tema_modo"] = novo_modo
+            # dispara a sincronização do tema nativo só nesse próximo
+            # render (flag de disparo único), não em todo rerun — clicar
+            # de novo no menu ⋮ oculto a cada interação seria visível e
+            # desnecessário.
+            st.session_state["_tema_sincronizar_pendente"] = novo_modo
             st.rerun()
+
+    pendente = st.session_state.pop("_tema_sincronizar_pendente", None)
+    if pendente:
+        _sincronizar_tema_nativo(pendente)
+
     return st.session_state["tema_modo"]
 
 
