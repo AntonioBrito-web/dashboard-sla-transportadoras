@@ -108,7 +108,11 @@ def _linha_selecionada(chave_widget: str) -> int | None:
     return linhas[0] if linhas else None
 
 
-st.set_page_config(page_title="Dashboard SLA Transportadoras", layout="wide")
+st.set_page_config(
+    page_title="Dashboard SLA Transportadoras",
+    page_icon=str(Path(__file__).resolve().parent / "assets" / "Logo-JT-Express-Red.png"),
+    layout="wide",
+)
 # Fonte Montserrat é definida em .streamlit/config.toml (theme.font) — isso
 # alcança inclusive o texto desenhado em canvas do st.dataframe/data_editor,
 # que uma injeção de CSS (font-family em html/body) não consegue tocar.
@@ -1857,6 +1861,16 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
             background-color: {colors["surface"]} !important;
             border-color: {colors["gridline"]} !important;
         }}
+        /* Campos de aviso (st.info/warning/error/success) — fundo na cor
+        secundária do tema (mesma de sidebar_bg/secondaryBackgroundColor) e
+        texto (inclusive o ícone, que herda currentColor) na cor primária,
+        em vez das cores padrão do Streamlit que não seguiam o tema custom. */
+        [data-testid="stAlertContainer"] {{
+            background-color: {colors["sidebar_bg"]} !important;
+        }}
+        [data-testid="stAlertContainer"] * {{
+            color: {colors["ink_primary"]} !important;
+        }}
         [data-baseweb="popover"] [data-baseweb="menu"], [data-baseweb="menu"] {{
             background-color: {colors["surface"]} !important;
         }}
@@ -2052,11 +2066,6 @@ def dashboard_screen(user: dict) -> None:
         del st.session_state["user"]
         st.rerun()
 
-    render_hero(titulo, df)
-
-    if user["role"] == "transportadora":
-        render_notificacao_reprovacao(user)
-
     # Cross-filter por clique: clicar numa barra (Regional/Motivos) ou numa
     # linha do Ranking filtra os outros gráficos/tabelas da seção analítica
     # (não afeta as 3 tabelas fixas de justificativa, que seguem só os
@@ -2064,7 +2073,10 @@ def dashboard_screen(user: dict) -> None:
     # que ainda precisa ser justificada). O gráfico/tabela que originou o
     # clique continua mostrando tudo (com o item clicado destacado), só os
     # outros ficam restritos — senão sumiriam as outras barras/linhas e
-    # ficaria impossível trocar a seleção.
+    # ficaria impossível trocar a seleção. Calculado ANTES do hero (e não
+    # só antes dos gráficos analíticos como antes) pra que os KPIs do
+    # cabeçalho também respondam ao clique — antes ficavam sempre com o
+    # total geral, sem refletir a seleção.
     regional_clicada = _campo_clicado("chart_regional", "sel_regional", "regional")
     motivo_clicado = _campo_clicado("chart_motivos", "sel_motivo", "motivo")
     transportadora_clicada = None
@@ -2083,6 +2095,11 @@ def dashboard_screen(user: dict) -> None:
         if transportadora_clicada and excluir != "transportadora":
             resultado = resultado[resultado["abreviatura"] == transportadora_clicada]
         return resultado
+
+    render_hero(titulo, com_filtro_clique(df))
+
+    if user["role"] == "transportadora":
+        render_notificacao_reprovacao(user)
 
     if regional_clicada or motivo_clicado or transportadora_clicada:
         chips = [
