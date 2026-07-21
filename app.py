@@ -628,42 +628,57 @@ def render_monthly_chart(df: pd.DataFrame, colors: dict, granularidade: str = "m
     ordem_x = dados[campo_x].tolist()
     eixo_x = alt.X(f"{campo_x}:N", sort=ordem_x, title=titulo_x, axis=alt.Axis(domainColor=colors["gridline"], tickColor=colors["gridline"], labelColor=colors["ink_secondary"]))
 
-    base = alt.Chart(melted)
+    META_SLA = 95
+    # Piso do eixo calculado a partir do próprio dado (não fixo em 0) — com
+    # os valores tipicamente na faixa de 80-100%, um eixo de 0 a 100 deixava
+    # a linha espremida lá em cima. Sobra pelo menos 10pp abaixo do menor
+    # valor (ou da própria meta de 95%, o que for menor), então a linha fica
+    # mais centralizada e a meta nunca cola na borda de baixo.
+    piso_eixo = max(0, min(melted["percentual"].min(), META_SLA) - 10)
+
+    base = alt.Chart(melted).transform_calculate(
+        percentual_fmt="format(datum.percentual, '.0f') + '%'"
+    )
+    escala_y = alt.Scale(domain=[piso_eixo, 100])
+    eixo_y = alt.Y(
+        "percentual:Q", title="% no prazo", scale=escala_y,
+        axis=alt.Axis(grid=False, labels=False, ticks=False, domainColor=colors["gridline"]),
+    )
     line = base.mark_line(point=True, strokeWidth=2).encode(
         x=eixo_x,
-        y=alt.Y(
-            "percentual:Q", title="% no prazo",
-            axis=alt.Axis(grid=False, labels=False, ticks=False, domainColor=colors["gridline"]),
-        ),
+        y=eixo_y,
         color=alt.Color(
             "indicador:N", title="", sort=ordem_indicador,
             scale=alt.Scale(domain=ordem_indicador, range=[BRAND_RED, colors["cor_secundaria"]]),
         ),
         tooltip=[campo_x, "indicador", alt.Tooltip("percentual:Q", format=".1f")],
     )
-    camadas = [line]
-    # Rótulo numérico em cada ponto só faz sentido com poucos pontos (visão
-    # mensal, no máximo 12) — na diária (até ~31 pontos) viraria poluição
-    # visual, então essa granularidade fica só com a linha + tooltip.
-    if granularidade != "diaria":
-        camadas.append(
-            base.transform_filter(alt.datum.indicador == "No prazo chegada")
-            .mark_text(dy=14, fontSize=11, fontWeight="bold")
-            .encode(
-                x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
-                color=alt.value(colors["ink_primary"]),
-            )
-        )
-        camadas.append(
-            base.transform_filter(alt.datum.indicador == "No prazo saída")
-            .mark_text(dy=-12, fontSize=11, fontWeight="bold")
-            .encode(
-                x=eixo_x, y="percentual:Q", text=alt.Text("percentual:Q", format=".0f"),
-                color=alt.value(colors["ink_primary"]),
-            )
-        )
+    labels_chegada = (
+        base.transform_filter(alt.datum.indicador == "No prazo chegada")
+        .mark_text(dy=14, fontSize=11, fontWeight="bold")
+        .encode(x=eixo_x, y=eixo_y, text="percentual_fmt:N", color=alt.value(colors["ink_primary"]))
+    )
+    labels_saida = (
+        base.transform_filter(alt.datum.indicador == "No prazo saída")
+        .mark_text(dy=-12, fontSize=11, fontWeight="bold")
+        .encode(x=eixo_x, y=eixo_y, text="percentual_fmt:N", color=alt.value(colors["ink_primary"]))
+    )
+    # Linha de meta (95%) — tracejada, cor neutra (não usa as cores dos
+    # indicadores nem as de status), com rótulo fixo no fim da linha.
+    meta_df = pd.DataFrame({"meta": [META_SLA]})
+    meta_rule = alt.Chart(meta_df).mark_rule(strokeDash=[5, 4], strokeWidth=1.5, color=colors["ink_muted"]).encode(
+        y=alt.Y("meta:Q", scale=escala_y)
+    )
+    meta_label = alt.Chart(meta_df).mark_text(
+        align="left", dx=4, dy=-6, fontSize=10, fontWeight="bold"
+    ).encode(
+        y=alt.Y("meta:Q", scale=escala_y),
+        x=alt.value(0),
+        text=alt.value(f"Meta {META_SLA}%"),
+        color=alt.value(colors["ink_muted"]),
+    )
     chart = (
-        alt.layer(*camadas)
+        alt.layer(meta_rule, line, labels_chegada, labels_saida, meta_label)
         .properties(height=320, background="transparent")
         .configure_view(strokeWidth=0)
         .configure_legend(labelColor=colors["ink_secondary"], titleColor=colors["ink_primary"])
