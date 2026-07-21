@@ -1864,16 +1864,19 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
             color: {colors["ink_primary"]} !important;
         }}
         /* As tags coloridas do multiselect (Ano/Mês/Quinzena/Regional/
-        Origem/Destino) cortavam a 1ª letra do texto — a pílula tem
-        largura/padding calculados pelo BaseWeb pra caber a fonte padrão
-        do Streamlit; a fonte Montserrat (mais larga) do config.toml não
-        cabia direito na mesma caixa fixa. Corrigido soltando o overflow
-        e dando um respiro extra à esquerda, sem mexer na cor (que já é
-        vermelha de propósito). O corte persistia mesmo com isso — achado
-        no bundle JS do BaseWeb que a "Root" da tag tem um
-        `max-width: calc(100% - <espaço>)` fixo, que a nossa regra de
-        overflow sozinha não desativa; sem isso, o texto de fato fica maior
-        que a caixa permite e o navegador esconde o excesso. */
+        Origem/Destino) cortavam a 1ª letra do texto. Duas tentativas
+        anteriores (soltar overflow/padding, depois remover o max-width
+        fixo da tag) não resolveram — print confirmou o corte continua e
+        mostrou um traço/cursor de texto bem em cima da 1ª tag. Causa real:
+        o BaseWeb desenha um <input> de busca (pra digitar e filtrar as
+        opções) com position:absolute quando NÃO focado, sem top/left
+        definido nesse override — cai na posição estática dele, que é bem
+        no canto onde a 1ª tag começa, cobrindo visualmente o início do
+        texto dela. Corrigido tirando esse input do position:absolute
+        (vira estático, sem sobrepor nada). */
+        [data-baseweb="select"] div:has(> input) {{
+            position: static !important;
+        }}
         [data-baseweb="tag"] {{
             background-color: {BRAND_RED} !important;
             overflow: visible !important;
