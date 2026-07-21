@@ -295,7 +295,17 @@ def _sincronizar_tema_nativo(modo: str) -> None:
                         item.click();
                     }} else {{
                         gatilho.click();
+                        return;
                     }}
+                    // o item é do tipo "radio" (seleção, não ação) — o
+                    // BaseWeb não fecha o popover sozinho nesse caso.
+                    // Fecha na mão simulando Esc, que é como o próprio
+                    // popover já sabe se fechar.
+                    setTimeout(function() {{
+                        doc.dispatchEvent(new KeyboardEvent("keydown", {{
+                            key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true,
+                        }}));
+                    }}, 150);
                 }}, 200);
             }}
             tentar(15);
@@ -728,8 +738,7 @@ STATUS_APROVACAO_LABEL = {"pendente": "Pendente", "aprovado": "Aprovado", "repro
 
 
 def render_tabela_detalhe(
-    detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str,
-    modo_tema: str, mostrar_titulo: bool = True,
+    detalhe: pd.DataFrame, colunas: dict, user: dict, titulo: str, key_sufixo: str, mostrar_titulo: bool = True
 ) -> None:
     if mostrar_titulo:
         st.subheader(titulo)
@@ -751,10 +760,12 @@ def render_tabela_detalhe(
     except Exception as e:
         st.error(f"Falha ao carregar justificativas do banco: {e}", icon="🚫")
         return
-    # reset_index é obrigatório aqui: "detalhe" chega ordenado por Data, com
-    # índice espalhado vindo do df original — sem um índice 0..n contíguo a
-    # paginação via .iloc (em _paginar) ficaria dessincronizada das linhas
-    # exibidas.
+    # reset_index é obrigatório aqui: o data_editor rastreia edições pela
+    # posição da linha, e sem um índice 0..n contíguo (o "detalhe" chega
+    # ordenado por Data, com índice espalhado vindo do df original) a
+    # edição registrada podia cair na linha errada — inclusive fazendo o
+    # popup de aprovação nunca aparecer pra linha que o usuário de fato
+    # marcou como "Aprovado".
     detalhe = detalhe.reset_index(drop=True).copy()
     detalhe["Justificativa"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("justificativa", "")
@@ -793,30 +804,41 @@ def render_tabela_detalhe(
     if ve_como_admin:
         detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
         colunas_exibir = colunas_exibir + ["Decisão"]
-    # Responsabilidade/Observação são preenchidas só pelo popup de
-    # aprovação, mas ficam visíveis pra todo mundo (inclusive a
-    # transportadora) — é o registro de qual foi a decisão e o motivo, não
-    # só um controle interno.
+    # Responsável/Observação são preenchidas só pelo popup de aprovação, mas
+    # ficam visíveis pra todo mundo (inclusive a transportadora) — é o
+    # registro de qual foi a decisão e o motivo, não só um controle interno.
     colunas_exibir = colunas_exibir + ["Responsável", "Observação"]
 
-    # Tabela é só leitura (st.dataframe/data_editor desenham em canvas, sem
-    # texto de verdade no DOM — não dá pra estilizar cabeçalho/tema). A
-    # Decisão em si é alterada pelo formulário "Alterar decisão da
-    # justificativa" abaixo, não direto numa célula da grade.
-    formatadores = {}
-    if "Data" in colunas_exibir:
-        formatadores["Data"] = lambda v: v.strftime("%d/%m/%Y") if pd.notna(v) else ""
+    if pode_editar:
+        # A Justificativa não é mais editável direto na tabela — escrever e
+        # anexar viram formulários dedicados abaixo, cada um restrito às
+        # viagens no estágio certo (sem justificativa / com justificativa
+        # mas sem anexo). Isso é o que garante o bloqueio: uma vez escrita,
+        # só o admin mexe nela de novo (reprovando).
+        desabilitadas = colunas_exibir
+    elif pode_aprovar:
+        # só a Decisão é editável, e só quando existe justificativa pra avaliar
+        desabilitadas = [c for c in colunas_exibir if c != "Decisão"]
+    else:
+        desabilitadas = colunas_exibir
+
+    config_colunas = {"Data": st.column_config.DateColumn(format="DD/MM/YYYY")}
     for col_datahora in ("Previsto chegada", "Real chegada", "Planejado saída", "Real saída", "TT planejado", "TT real"):
         if col_datahora in colunas_exibir:
-            formatadores[col_datahora] = lambda v: v.strftime("%d/%m/%Y %H:%M") if pd.notna(v) else ""
+            config_colunas[col_datahora] = st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
+    if pode_aprovar:
+        config_colunas["Decisão"] = st.column_config.SelectboxColumn(
+            options=["Pendente", "Aprovado", "Reprovado", "Excluir"]
+        )
 
-    colors = chart_colors(modo_tema)
-    pagina = _paginar(detalhe[colunas_exibir], key=f"pagina_detalhe_{key_sufixo}")
-    st.markdown(
-        _tabela_html(
-            pagina, colors, formatadores=formatadores, colunas_quebra={"Justificativa", "Observação"}
-        ),
-        unsafe_allow_html=True,
+    editado = st.data_editor(
+        detalhe[colunas_exibir],
+        width="stretch",
+        hide_index=True,
+        disabled=desabilitadas,
+        column_config=config_colunas,
+        row_height=80,
+        key=f"detalhe_editor_{key_sufixo}",
     )
 
     if pode_editar:
@@ -970,72 +992,32 @@ def render_tabela_detalhe(
                                 st.error("Anexo não encontrado no banco.")
 
     if pode_aprovar:
-        com_justificativa_admin = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
-        with st.expander("Alterar decisão da justificativa"):
-            if not com_justificativa_admin:
-                st.info("Nenhuma viagem com justificativa pra decidir nesta tabela.")
-            else:
-                gen_decisao = st.session_state.setdefault(f"decisao_gen_{key_sufixo}", 0)
-                # Mesmo padrão dos formulários de justificativa/anexo acima:
-                # opção pela chave_viagem, não pela posição da linha, pra
-                # sobreviver a uma troca de filtro na lateral.
-                mapa_decisao = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa_admin}
-                # Rótulo mais completo (Data, ID Viagem, Seção da estrada —
-                # a única coluna de rota presente nas 3 categorias — e a
-                # decisão atual) pra dar pra casar a opção do selectbox com
-                # a linha certa na tabela acima, já que a tabela virou HTML
-                # e não tem mais seleção/realce de linha vinculado a este
-                # formulário.
-                def _rotulo_decisao(chave_v: str) -> str:
-                    linha = detalhe.loc[mapa_decisao[chave_v]]
-                    return (
-                        f"{formatar_data_br(linha['Data'])} — {linha['ID Viagem']} — "
-                        f"{linha['Seção da estrada']} — Decisão atual: {linha['Decisão']}"
+        for idx in detalhe.index:
+            chave = detalhe.loc[idx, "chave_viagem"]
+            chave_id = chave.replace("|", "_").replace("/", "-")
+            justificativa_atual = detalhe.loc[idx, "Justificativa"]
+            decisao_antiga = detalhe.loc[idx, "Decisão"]
+            decisao_nova = editado.loc[idx, "Decisão"]
+            if not justificativa_atual or decisao_nova == decisao_antiga:
+                continue
+            if decisao_nova == "Reprovado":
+                try:
+                    reprovar_justificativa(chave, user["username"])
+                except Exception as e:
+                    st.error(f"Falha ao reprovar: {e}")
+                else:
+                    _notificar_decisao_justificativa(
+                        detalhe.loc[idx, "transportadora"], detalhe.loc[idx, "ID Viagem"], "reprovada"
                     )
-
-                escolha_d_chave = st.selectbox(
-                    "Viagem",
-                    options=list(mapa_decisao.keys()),
-                    format_func=_rotulo_decisao,
-                    key=f"decisao_sel_{key_sufixo}_{gen_decisao}",
-                )
-                idx_escolhido = mapa_decisao[escolha_d_chave]
-                nova_decisao = st.selectbox(
-                    "Nova decisão",
-                    ["Pendente", "Aprovado", "Reprovado", "Excluir"],
-                    key=f"decisao_valor_{key_sufixo}_{gen_decisao}",
-                )
-                if st.button("Aplicar decisão", key=f"decisao_botao_{key_sufixo}_{gen_decisao}"):
-                    chave = detalhe.loc[idx_escolhido, "chave_viagem"]
-                    chave_id = chave.replace("|", "_").replace("/", "-")
-                    decisao_antiga = detalhe.loc[idx_escolhido, "Decisão"]
-                    if nova_decisao == decisao_antiga:
-                        st.warning("Essa já é a decisão atual dessa viagem.", icon="⚠️")
-                    elif nova_decisao == "Reprovado":
-                        try:
-                            reprovar_justificativa(chave, user["username"])
-                        except Exception as e:
-                            st.error(f"Falha ao reprovar: {e}")
-                        else:
-                            _notificar_decisao_justificativa(
-                                detalhe.loc[idx_escolhido, "transportadora"], detalhe.loc[idx_escolhido, "ID Viagem"], "reprovada"
-                            )
-                            st.session_state[f"decisao_gen_{key_sufixo}"] = gen_decisao + 1
-                            st.warning(f"Justificativa de {detalhe.loc[idx_escolhido, 'ID Viagem']} reprovada.", icon="🚫")
-                            st.rerun()
-                    elif nova_decisao == "Aprovado":
-                        st.session_state[f"aprovando_{chave_id}"] = True
-                        st.session_state[f"decisao_gen_{key_sufixo}"] = gen_decisao + 1
-                        st.rerun()
-                    elif nova_decisao == "Excluir":
-                        st.session_state[f"excluindo_{chave_id}"] = True
-                        st.session_state[f"decisao_gen_{key_sufixo}"] = gen_decisao + 1
-                        st.rerun()
-                    elif nova_decisao == "Pendente":
-                        st.session_state.pop(f"aprovando_{chave_id}", None)
-                        st.session_state.pop(f"excluindo_{chave_id}", None)
-                        st.session_state[f"decisao_gen_{key_sufixo}"] = gen_decisao + 1
-                        st.rerun()
+                    st.warning(f"Justificativa de {detalhe.loc[idx, 'ID Viagem']} reprovada.", icon="🚫")
+                    st.rerun()
+            elif decisao_nova == "Aprovado":
+                st.session_state[f"aprovando_{chave_id}"] = True
+            elif decisao_nova == "Excluir":
+                st.session_state[f"excluindo_{chave_id}"] = True
+            elif decisao_nova == "Pendente":
+                st.session_state.pop(f"aprovando_{chave_id}", None)
+                st.session_state.pop(f"excluindo_{chave_id}", None)
 
         pendentes_categoria = [
             idx for idx in detalhe.index
@@ -1281,7 +1263,7 @@ def render_grafico_pendentes(resumo: pd.DataFrame, colors: dict) -> None:
     st.altair_chart(chart, width="stretch", theme=None)
 
 
-def render_tabelas_fixas(df: pd.DataFrame, user: dict, modo_tema: str) -> None:
+def render_tabelas_fixas(df: pd.DataFrame, user: dict) -> None:
     # Usado tanto pra transportadora quanto pro admin: garante acesso direto
     # às 3 dimensões de atraso (saída/chegada/transit), sem depender de
     # navegar bar a bar no gráfico — o que pode "esconder" justificativas
@@ -1304,27 +1286,27 @@ def render_tabelas_fixas(df: pd.DataFrame, user: dict, modo_tema: str) -> None:
         with aba_saida:
             with st.container(key="card_detalhe_saida"):
                 render_resumo_categoria(detalhe_saida)
-                render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida", modo_tema, mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida", mostrar_titulo=False)
         with aba_chegada:
             with st.container(key="card_detalhe_chegada"):
                 render_resumo_categoria(detalhe_chegada)
-                render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada", modo_tema, mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada", mostrar_titulo=False)
         with aba_transit:
             with st.container(key="card_detalhe_transit"):
                 render_resumo_categoria(detalhe_transit)
-                render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit", modo_tema, mostrar_titulo=False)
+                render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit", mostrar_titulo=False)
     else:
         # Transportadora vê as 3 tabelas empilhadas — o resumo fica logo
         # acima de cada tabela respectiva, não um bloco único no topo.
         with st.container(key="card_detalhe_saida"):
             render_resumo_categoria(detalhe_saida)
-            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida", modo_tema)
+            render_tabela_detalhe(detalhe_saida, colunas_saida, user, "Detalhe atraso saída", "fixo_saida")
         with st.container(key="card_detalhe_chegada"):
             render_resumo_categoria(detalhe_chegada)
-            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada", modo_tema)
+            render_tabela_detalhe(detalhe_chegada, colunas_chegada, user, "Detalhe atraso chegada", "fixo_chegada")
         with st.container(key="card_detalhe_transit"):
             render_resumo_categoria(detalhe_transit)
-            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit", modo_tema)
+            render_tabela_detalhe(detalhe_transit, colunas_transit, user, "Detalhe atraso transit time", "fixo_transit")
 
 
 def _paginar(df: pd.DataFrame, key: str, linhas_por_pagina: int = 100) -> pd.DataFrame:
@@ -2138,7 +2120,7 @@ def dashboard_screen(user: dict) -> None:
 
     if user["role"] in ("transportadora", "admin", "interno"):
         st.divider()
-        render_tabelas_fixas(df, user, modo_tema)
+        render_tabelas_fixas(df, user)
 
 
 def main() -> None:
