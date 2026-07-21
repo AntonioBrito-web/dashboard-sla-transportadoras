@@ -714,7 +714,11 @@ def render_tabela_detalhe(
     detalhe["_status"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("status_aprovacao", "pendente")
     )
-    detalhe["Categoria"] = detalhe["chave_viagem"].map(
+    # "Responsável" (não "Responsabilidade") de propósito: já existe uma
+    # coluna "Responsabilidade" vinda direto da planilha (o motivo do
+    # atraso) — esta aqui é a categoria escolhida pelo admin na decisão,
+    # duas coisas diferentes que não podem ter o mesmo nome de coluna.
+    detalhe["Responsável"] = detalhe["chave_viagem"].map(
         lambda k: justificativas.get(k, {}).get("categoria", "")
     )
     detalhe["Observação"] = detalhe["chave_viagem"].map(
@@ -732,10 +736,11 @@ def render_tabela_detalhe(
     if ve_como_admin:
         detalhe["Decisão"] = detalhe["_status"].map(STATUS_APROVACAO_LABEL).fillna("Pendente")
         colunas_exibir = colunas_exibir + ["Decisão"]
-    # Categoria/Observação são preenchidas só pelo popup de aprovação, mas
-    # ficam visíveis pra todo mundo (inclusive a transportadora) — é o
-    # registro de qual foi a decisão e o motivo, não só um controle interno.
-    colunas_exibir = colunas_exibir + ["Categoria", "Observação"]
+    # Responsabilidade/Observação são preenchidas só pelo popup de
+    # aprovação, mas ficam visíveis pra todo mundo (inclusive a
+    # transportadora) — é o registro de qual foi a decisão e o motivo, não
+    # só um controle interno.
+    colunas_exibir = colunas_exibir + ["Responsável", "Observação"]
 
     # Tabela é só leitura (st.dataframe/data_editor desenham em canvas, sem
     # texto de verdade no DOM — não dá pra estilizar cabeçalho/tema). A
@@ -750,7 +755,12 @@ def render_tabela_detalhe(
 
     colors = chart_colors(modo_tema)
     pagina = _paginar(detalhe[colunas_exibir], key=f"pagina_detalhe_{key_sufixo}")
-    st.markdown(_tabela_html(pagina, colors, formatadores=formatadores), unsafe_allow_html=True)
+    st.markdown(
+        _tabela_html(
+            pagina, colors, formatadores=formatadores, colunas_quebra={"Justificativa", "Observação"}
+        ),
+        unsafe_allow_html=True,
+    )
 
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
@@ -980,7 +990,7 @@ def render_tabela_detalhe(
             with st.form(f"form_aprova_{key_sufixo}_{chave_id}"):
                 st.write(f"Aprovar justificativa — {detalhe.loc[idx, 'ID Viagem']}")
                 categoria = st.selectbox(
-                    "Categoria de responsabilidade", CATEGORIAS_APROVACAO, key=f"cat_{key_sufixo}_{chave_id}"
+                    "Responsável", CATEGORIAS_APROVACAO, key=f"cat_{key_sufixo}_{chave_id}"
                 )
                 observacao = st.text_area(
                     "Observação (opcional)", key=f"obs_{key_sufixo}_{chave_id}"
@@ -1040,7 +1050,7 @@ def _notificar_decisao_justificativa(
             return
         linhas = [f"A justificativa da viagem {id_viagem} foi {decisao}."]
         if categoria:
-            linhas.append(f"Categoria: {categoria}")
+            linhas.append(f"Responsável: {categoria}")
         if observacao:
             linhas.append(f"Observação: {observacao}")
         linhas.append("Acesse o Dashboard SLA Transportadoras para mais detalhes.")
@@ -1277,13 +1287,16 @@ def _paginar(df: pd.DataFrame, key: str, linhas_por_pagina: int = 100) -> pd.Dat
     return df.iloc[inicio : inicio + linhas_por_pagina]
 
 
-def _tabela_html(df: pd.DataFrame, colors: dict, formatadores: dict | None = None) -> str:
+def _tabela_html(
+    df: pd.DataFrame, colors: dict, formatadores: dict | None = None, colunas_quebra: set | None = None
+) -> str:
     # st.dataframe/data_editor desenham em canvas (glide-data-grid) — não
     # tem texto de verdade no DOM pra estilizar, então não dá pra deixar o
     # cabeçalho branco/negrito por ali. Essa tabela HTML própria é usada só
     # nas tabelas puramente de exibição (sem seleção de linha/edição), onde
     # dá pra abrir mão do grid nativo em troca de controle total do CSS.
     formatadores = formatadores or {}
+    colunas_quebra = colunas_quebra or set()
     colunas = list(df.columns)
     linhas_html = []
     for _, linha in df.iterrows():
@@ -1294,9 +1307,18 @@ def _tabela_html(df: pd.DataFrame, colors: dict, formatadores: dict | None = Non
                 texto = formatadores[col](valor)
             else:
                 texto = "" if pd.isna(valor) else str(valor)
+            # Colunas de texto livre (Justificativa/Observação) quebram
+            # linha e limitam a largura — sem isso, o texto todo numa linha
+            # só empurrava a tabela pra muito mais larga que o card,
+            # forçando rolagem horizontal mesmo em telas grandes.
+            estilo_quebra = (
+                "white-space:normal; word-break:break-word; max-width:280px;"
+                if col in colunas_quebra
+                else "white-space:nowrap;"
+            )
             celulas.append(
                 f'<td style="padding:0.4rem 0.75rem; border-bottom:1px solid {colors["gridline"]}; '
-                f'color:{colors["ink_primary"]}; white-space:nowrap;">{html_lib.escape(texto)}</td>'
+                f'color:{colors["ink_primary"]}; {estilo_quebra}">{html_lib.escape(texto)}</td>'
             )
         linhas_html.append(f"<tr>{''.join(celulas)}</tr>")
     cabecalho = "".join(
