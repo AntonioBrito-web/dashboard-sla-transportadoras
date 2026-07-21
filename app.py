@@ -1869,10 +1869,15 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
         do Streamlit; a fonte Montserrat (mais larga) do config.toml não
         cabia direito na mesma caixa fixa. Corrigido soltando o overflow
         e dando um respiro extra à esquerda, sem mexer na cor (que já é
-        vermelha de propósito). */
+        vermelha de propósito). O corte persistia mesmo com isso — achado
+        no bundle JS do BaseWeb que a "Root" da tag tem um
+        `max-width: calc(100% - <espaço>)` fixo, que a nossa regra de
+        overflow sozinha não desativa; sem isso, o texto de fato fica maior
+        que a caixa permite e o navegador esconde o excesso. */
         [data-baseweb="tag"] {{
             background-color: {BRAND_RED} !important;
             overflow: visible !important;
+            max-width: none !important;
             padding-left: 8px !important;
         }}
         [data-baseweb="tag"], [data-baseweb="tag"] * {{
@@ -1882,6 +1887,29 @@ def _bloco_css_cards(colors: dict, sombra_cor: str) -> str:
             overflow: visible !important;
             text-overflow: unset !important;
             white-space: nowrap !important;
+            max-width: none !important;
+        }}
+        /* Funde o rótulo (Ano/Mês/Quinzena/Regional/Origem/Destino/
+        Transportadora) com a caixa de seleção logo abaixo num card só —
+        sem isso eram dois elementos soltos, com um respiro grande entre
+        eles, sem parecer uma unidade só. Escopado à barra lateral pra não
+        alterar selects em formulários no resto do app. */
+        [data-testid="stSidebar"] [data-testid="stMultiSelect"],
+        [data-testid="stSidebar"] [data-testid="stSelectbox"] {{
+            background: {colors["surface"]} !important;
+            border: 1px solid {colors["gridline"]};
+            border-radius: 10px;
+            padding: 0.4rem 0.6rem 0.6rem 0.6rem;
+            margin-bottom: 0.6rem;
+        }}
+        [data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-testid="stWidgetLabel"],
+        [data-testid="stSidebar"] [data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
+            margin-bottom: 0.15rem;
+        }}
+        [data-testid="stSidebar"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div,
+        [data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {{
+            border: none !important;
+            background: transparent !important;
         }}
         [data-testid="stAppViewBlockContainer"], .main .block-container {{
             background: {colors["surface"]};
