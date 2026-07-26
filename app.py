@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import (
+    AcessoBloqueadoError,
+    acesso_liberado,
     authenticate,
     list_all_users,
     list_internal_users,
@@ -490,6 +492,9 @@ def login_screen() -> None:
             if submitted:
                 try:
                     user = authenticate(username.strip(), password)
+                except AcessoBloqueadoError as e:
+                    st.error(str(e), icon="🔒")
+                    return
                 except Exception as e:
                     st.error(f"Falha ao verificar login: {e}")
                     return
@@ -2226,6 +2231,10 @@ def main() -> None:
         login_screen()
     else:
         user = st.session_state["user"]
+        if not acesso_liberado(user):
+            del st.session_state["user"]
+            st.error("Acesso bloqueado temporariamente. Fale com o administrador.", icon="🔒")
+            return
         if user.get("deve_trocar_senha"):
             trocar_senha_obrigatoria_screen(user)
         else:
