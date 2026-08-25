@@ -281,6 +281,44 @@ def alterar_role_usuario(username: str, novo_role: str, nova_transportadora: str
     )
 
 
+def init_acessos_db() -> None:
+    _executar(
+        """
+        CREATE TABLE IF NOT EXISTS acessos_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT,
+            transportadora TEXT,
+            acessado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
+def registrar_acesso(username: str, role: str | None, transportadora: str | None) -> None:
+    _executar(
+        "INSERT INTO acessos_log (username, role, transportadora) VALUES (?, ?, ?)",
+        [username, role, transportadora],
+    )
+
+
+def listar_acessos(desde: str | None = None) -> list[dict]:
+    if desde:
+        resultado = _executar(
+            "SELECT username, role, transportadora, acessado_em FROM acessos_log "
+            "WHERE acessado_em >= ? ORDER BY acessado_em DESC",
+            [desde],
+        )
+    else:
+        resultado = _executar(
+            "SELECT username, role, transportadora, acessado_em FROM acessos_log ORDER BY acessado_em DESC"
+        )
+    return [
+        {"username": r[0], "role": r[1] or "", "transportadora": r[2] or "", "acessado_em": r[3]}
+        for r in resultado["linhas"]
+    ]
+
+
 def init_meta_db() -> None:
     # Flags idempotentes que PRECISAM sobreviver a reboot/redeploy (ex.:
     # "já mandei o e-mail de prazo hoje") vivem aqui, não em src/db.py

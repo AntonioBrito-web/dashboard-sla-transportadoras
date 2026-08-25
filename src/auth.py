@@ -5,9 +5,11 @@ from src.turso_db import (
     alterar_role_usuario,
     criar_usuario,
     get_usuario,
+    listar_acessos,
     listar_todos_usuarios,
     listar_transportadora_usuarios,
     listar_usuarios_internos,
+    registrar_acesso,
     renomear_usuario,
     transportadoras_existentes,
     usuarios_existentes,
@@ -46,7 +48,12 @@ def authenticate(username: str, password: str) -> dict | None:
         return None
     if not acesso_liberado(user):
         raise AcessoBloqueadoError("Acesso bloqueado temporariamente. Fale com o administrador.")
+    registrar_acesso(user["username"], user["role"], user.get("transportadora"))
     return user
+
+
+def list_accesses(desde: str | None = None) -> list[dict]:
+    return listar_acessos(desde)
 
 
 def create_user(
