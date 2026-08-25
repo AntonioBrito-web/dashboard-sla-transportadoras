@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.auth import (
     authenticate,
+    list_accesses,
     list_all_users,
     list_internal_users,
     list_transportadora_users,
@@ -43,6 +44,7 @@ from src.turso_db import (
     get_email,
     get_justificativas,
     get_meta_turso,
+    init_acessos_db,
     init_justificativas_db,
     init_meta_db,
     init_usuarios_db,
@@ -204,6 +206,7 @@ def _preparar_turso() -> bool:
     try:
         init_justificativas_db()
         init_usuarios_db()
+        init_acessos_db()
         init_meta_db()
         print("[turso] Conectado com sucesso — usuários/justificativas/anexos disponíveis.", flush=True)
         return True
@@ -1613,6 +1616,49 @@ def render_gerenciar_acessos_internos() -> None:
                         st.session_state.pop(chave, None)
 
 
+def render_log_acessos() -> None:
+    with st.sidebar.expander("Log de acessos"):
+        st.caption(
+            "Registro de logins bem-sucedidos (usuário, perfil e horário). Só existem "
+            "registros a partir da data em que esse log foi ativado — acessos anteriores "
+            "não ficaram salvos."
+        )
+        hoje = date.today()
+        default_inicio = hoje - timedelta(days=60)
+        col_ini, col_fim = st.columns(2)
+        with col_ini:
+            data_inicio = st.date_input("De", value=default_inicio, key="log_acessos_de")
+        with col_fim:
+            data_fim = st.date_input("Até", value=hoje, key="log_acessos_ate")
+
+        try:
+            desde = datetime.combine(data_inicio, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
+            registros = [
+                r for r in list_accesses(desde)
+                if r["acessado_em"][:10] <= data_fim.strftime("%Y-%m-%d")
+            ]
+        except Exception as e:
+            st.error(f"Falha ao carregar log de acessos: {e}")
+            registros = []
+
+        if not registros:
+            st.info("Nenhum acesso registrado no período selecionado.")
+            return
+
+        df_log = pd.DataFrame(registros)[["acessado_em", "username", "role", "transportadora"]]
+        df_log.columns = ["Data/hora", "Usuário", "Perfil", "Transportadora"]
+        st.dataframe(df_log, width="stretch", hide_index=True)
+
+        csv_bytes = df_log.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Baixar CSV",
+            data=csv_bytes,
+            file_name=f"log_acessos_{data_inicio}_{data_fim}.csv",
+            mime="text/csv",
+            key="log_acessos_download",
+        )
+
+
 def render_alterar_perfil(user: dict) -> None:
     with st.sidebar.expander("Alterar perfil de usuário"):
         st.caption(
@@ -2033,6 +2079,7 @@ def dashboard_screen(user: dict) -> None:
     if user["role"] == "admin":
         render_gerenciar_senhas()
         render_gerenciar_acessos_internos()
+        render_log_acessos()
         render_alterar_perfil(user)
 
     render_alterar_senha(user)
