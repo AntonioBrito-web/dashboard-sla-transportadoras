@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import (
+    AcessoBloqueadoError,
+    acesso_liberado,
     authenticate,
     list_accesses,
     list_all_users,
@@ -493,6 +495,9 @@ def login_screen() -> None:
             if submitted:
                 try:
                     user = authenticate(username.strip(), password)
+                except AcessoBloqueadoError as e:
+                    st.error(str(e), icon="🔒")
+                    return
                 except Exception as e:
                     st.error(f"Falha ao verificar login: {e}")
                     return
@@ -883,7 +888,14 @@ def render_tabela_detalhe(
 
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
-        com_justificativa = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
+        # Só entra aqui quem tem justificativa E ainda não tem anexo — uma
+        # vez que a viagem já recebeu anexo, o formulário abaixo para de
+        # oferecê-la, senão dava pra reenviar (e duplicar) o anexo mandando
+        # de novo pra mesma viagem já concluída.
+        com_justificativa_sem_anexo = [
+            idx for idx in detalhe.index
+            if detalhe.loc[idx, "Justificativa"] and not detalhe.loc[idx, "_tem_anexo"]
+        ]
 
         with st.expander("Escrever justificativa"):
             if not sem_justificativa:
@@ -924,17 +936,18 @@ def render_tabela_detalhe(
                             st.rerun()
 
         with st.expander("Anexar arquivo a uma viagem"):
-            if not com_justificativa:
+            if not com_justificativa_sem_anexo:
                 st.warning(
-                    "Nenhuma viagem com justificativa preenchida ainda. "
-                    "Escreva a justificativa antes de anexar um arquivo.",
+                    "Nenhuma viagem pendente de anexo. Escreva a justificativa antes de "
+                    "anexar um arquivo — e uma viagem que já tem anexo não aceita outro "
+                    "(fale com o admin se precisar reenviar).",
                     icon="⚠️",
                 )
             else:
                 gen_anexo = st.session_state.setdefault(f"anexo_gen_{key_sufixo}", 0)
                 # Mesma correção do bloco de justificativa acima: opção
                 # pela chave_viagem, não pela posição da linha.
-                mapa_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa}
+                mapa_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa_sem_anexo}
                 escolha_chave = st.selectbox(
                     "Viagem",
                     options=list(mapa_anexo.keys()),
@@ -953,6 +966,15 @@ def render_tabela_detalhe(
                 if st.button("Salvar anexo(s)", key=f"anexo_botao_{key_sufixo}_{gen_anexo}"):
                     if not arquivos:
                         st.warning("Selecione ao menos um arquivo antes de salvar.", icon="⚠️")
+                    elif detalhe.loc[escolha, "_tem_anexo"]:
+                        # Segunda trava (defesa em profundidade): cobre o caso
+                        # raro de a seleção ter ficado presa num valor antigo
+                        # (ex.: duas abas abertas) — sem isso, só o filtro do
+                        # selectbox acima impediria o reenvio.
+                        st.error(
+                            "Esta viagem já tem anexo enviado — não é possível anexar de novo.",
+                            icon="🚫",
+                        )
                     else:
                         try:
                             salvar_anexos(
@@ -2273,6 +2295,10 @@ def main() -> None:
         login_screen()
     else:
         user = st.session_state["user"]
+        if not acesso_liberado(user):
+            del st.session_state["user"]
+            st.error("Acesso bloqueado temporariamente. Fale com o administrador.", icon="🔒")
+            return
         if user.get("deve_trocar_senha"):
             trocar_senha_obrigatoria_screen(user)
         else:
