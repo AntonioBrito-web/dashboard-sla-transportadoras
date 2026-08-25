@@ -9,7 +9,10 @@ import pandas as pd
 import streamlit as st
 
 from src.auth import (
+    AcessoBloqueadoError,
+    acesso_liberado,
     authenticate,
+    list_accesses,
     list_all_users,
     list_internal_users,
     list_transportadora_users,
@@ -43,6 +46,7 @@ from src.turso_db import (
     get_email,
     get_justificativas,
     get_meta_turso,
+    init_acessos_db,
     init_justificativas_db,
     init_meta_db,
     init_usuarios_db,
@@ -204,6 +208,7 @@ def _preparar_turso() -> bool:
     try:
         init_justificativas_db()
         init_usuarios_db()
+        init_acessos_db()
         init_meta_db()
         print("[turso] Conectado com sucesso — usuários/justificativas/anexos disponíveis.", flush=True)
         return True
@@ -490,6 +495,9 @@ def login_screen() -> None:
             if submitted:
                 try:
                     user = authenticate(username.strip(), password)
+                except AcessoBloqueadoError as e:
+                    st.error(str(e), icon="🔒")
+                    return
                 except Exception as e:
                     st.error(f"Falha ao verificar login: {e}")
                     return
@@ -880,7 +888,14 @@ def render_tabela_detalhe(
 
     if pode_editar:
         sem_justificativa = [idx for idx in detalhe.index if not detalhe.loc[idx, "Justificativa"]]
-        com_justificativa = [idx for idx in detalhe.index if detalhe.loc[idx, "Justificativa"]]
+        # Só entra aqui quem tem justificativa E ainda não tem anexo — uma
+        # vez que a viagem já recebeu anexo, o formulário abaixo para de
+        # oferecê-la, senão dava pra reenviar (e duplicar) o anexo mandando
+        # de novo pra mesma viagem já concluída.
+        com_justificativa_sem_anexo = [
+            idx for idx in detalhe.index
+            if detalhe.loc[idx, "Justificativa"] and not detalhe.loc[idx, "_tem_anexo"]
+        ]
 
         with st.expander("Escrever justificativa"):
             if not sem_justificativa:
@@ -921,17 +936,18 @@ def render_tabela_detalhe(
                             st.rerun()
 
         with st.expander("Anexar arquivo a uma viagem"):
-            if not com_justificativa:
+            if not com_justificativa_sem_anexo:
                 st.warning(
-                    "Nenhuma viagem com justificativa preenchida ainda. "
-                    "Escreva a justificativa antes de anexar um arquivo.",
+                    "Nenhuma viagem pendente de anexo. Escreva a justificativa antes de "
+                    "anexar um arquivo — e uma viagem que já tem anexo não aceita outro "
+                    "(fale com o admin se precisar reenviar).",
                     icon="⚠️",
                 )
             else:
                 gen_anexo = st.session_state.setdefault(f"anexo_gen_{key_sufixo}", 0)
                 # Mesma correção do bloco de justificativa acima: opção
                 # pela chave_viagem, não pela posição da linha.
-                mapa_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa}
+                mapa_anexo = {detalhe.loc[idx, "chave_viagem"]: idx for idx in com_justificativa_sem_anexo}
                 escolha_chave = st.selectbox(
                     "Viagem",
                     options=list(mapa_anexo.keys()),
@@ -950,6 +966,15 @@ def render_tabela_detalhe(
                 if st.button("Salvar anexo(s)", key=f"anexo_botao_{key_sufixo}_{gen_anexo}"):
                     if not arquivos:
                         st.warning("Selecione ao menos um arquivo antes de salvar.", icon="⚠️")
+                    elif detalhe.loc[escolha, "_tem_anexo"]:
+                        # Segunda trava (defesa em profundidade): cobre o caso
+                        # raro de a seleção ter ficado presa num valor antigo
+                        # (ex.: duas abas abertas) — sem isso, só o filtro do
+                        # selectbox acima impediria o reenvio.
+                        st.error(
+                            "Esta viagem já tem anexo enviado — não é possível anexar de novo.",
+                            icon="🚫",
+                        )
                     else:
                         try:
                             salvar_anexos(
@@ -1613,6 +1638,49 @@ def render_gerenciar_acessos_internos() -> None:
                         st.session_state.pop(chave, None)
 
 
+def render_log_acessos() -> None:
+    with st.sidebar.expander("Log de acessos"):
+        st.caption(
+            "Registro de logins bem-sucedidos (usuário, perfil e horário). Só existem "
+            "registros a partir da data em que esse log foi ativado — acessos anteriores "
+            "não ficaram salvos."
+        )
+        hoje = date.today()
+        default_inicio = hoje - timedelta(days=60)
+        col_ini, col_fim = st.columns(2)
+        with col_ini:
+            data_inicio = st.date_input("De", value=default_inicio, key="log_acessos_de")
+        with col_fim:
+            data_fim = st.date_input("Até", value=hoje, key="log_acessos_ate")
+
+        try:
+            desde = datetime.combine(data_inicio, datetime.min.time()).strftime("%Y-%m-%d %H:%M:%S")
+            registros = [
+                r for r in list_accesses(desde)
+                if r["acessado_em"][:10] <= data_fim.strftime("%Y-%m-%d")
+            ]
+        except Exception as e:
+            st.error(f"Falha ao carregar log de acessos: {e}")
+            registros = []
+
+        if not registros:
+            st.info("Nenhum acesso registrado no período selecionado.")
+            return
+
+        df_log = pd.DataFrame(registros)[["acessado_em", "username", "role", "transportadora"]]
+        df_log.columns = ["Data/hora", "Usuário", "Perfil", "Transportadora"]
+        st.dataframe(df_log, width="stretch", hide_index=True)
+
+        csv_bytes = df_log.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Baixar CSV",
+            data=csv_bytes,
+            file_name=f"log_acessos_{data_inicio}_{data_fim}.csv",
+            mime="text/csv",
+            key="log_acessos_download",
+        )
+
+
 def render_alterar_perfil(user: dict) -> None:
     with st.sidebar.expander("Alterar perfil de usuário"):
         st.caption(
@@ -2033,6 +2101,7 @@ def dashboard_screen(user: dict) -> None:
     if user["role"] == "admin":
         render_gerenciar_senhas()
         render_gerenciar_acessos_internos()
+        render_log_acessos()
         render_alterar_perfil(user)
 
     render_alterar_senha(user)
@@ -2226,6 +2295,10 @@ def main() -> None:
         login_screen()
     else:
         user = st.session_state["user"]
+        if not acesso_liberado(user):
+            del st.session_state["user"]
+            st.error("Acesso bloqueado temporariamente. Fale com o administrador.", icon="🔒")
+            return
         if user.get("deve_trocar_senha"):
             trocar_senha_obrigatoria_screen(user)
         else:

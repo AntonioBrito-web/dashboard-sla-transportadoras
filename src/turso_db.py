@@ -18,13 +18,22 @@ import json
 
 
 def _config() -> tuple[str, str]:
+    database = ""
+    auth_token = ""
     try:
         import streamlit as st
 
         database = str(st.secrets.get("TURSO_DATABASE_URL", "")).strip().strip("'\"")
         auth_token = str(st.secrets.get("TURSO_AUTH_TOKEN", "")).strip().strip("'\"")
-    except Exception as e:
-        raise RuntimeError(f"Falha ao ler configuração do Turso: {e}") from e
+    except Exception:
+        pass
+    # Fallback pra variáveis de ambiente — usado por scripts de manutenção
+    # rodados fora do Streamlit (sem .streamlit/secrets.toml disponível).
+    if not database or not auth_token:
+        import os
+
+        database = database or os.environ.get("TURSO_DATABASE_URL", "").strip()
+        auth_token = auth_token or os.environ.get("TURSO_AUTH_TOKEN", "").strip()
     if not database or not auth_token:
         raise RuntimeError(
             "TURSO_DATABASE_URL / TURSO_AUTH_TOKEN não configurados nos Secrets do "
@@ -272,6 +281,44 @@ def alterar_role_usuario(username: str, novo_role: str, nova_transportadora: str
     )
 
 
+def init_acessos_db() -> None:
+    _executar(
+        """
+        CREATE TABLE IF NOT EXISTS acessos_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT,
+            transportadora TEXT,
+            acessado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+
+def registrar_acesso(username: str, role: str | None, transportadora: str | None) -> None:
+    _executar(
+        "INSERT INTO acessos_log (username, role, transportadora) VALUES (?, ?, ?)",
+        [username, role, transportadora],
+    )
+
+
+def listar_acessos(desde: str | None = None) -> list[dict]:
+    if desde:
+        resultado = _executar(
+            "SELECT username, role, transportadora, acessado_em FROM acessos_log "
+            "WHERE acessado_em >= ? ORDER BY acessado_em DESC",
+            [desde],
+        )
+    else:
+        resultado = _executar(
+            "SELECT username, role, transportadora, acessado_em FROM acessos_log ORDER BY acessado_em DESC"
+        )
+    return [
+        {"username": r[0], "role": r[1] or "", "transportadora": r[2] or "", "acessado_em": r[3]}
+        for r in resultado["linhas"]
+    ]
+
+
 def init_meta_db() -> None:
     # Flags idempotentes que PRECISAM sobreviver a reboot/redeploy (ex.:
     # "já mandei o e-mail de prazo hoje") vivem aqui, não em src/db.py
@@ -407,6 +454,39 @@ def get_anexo_por_id(anexo_id: int) -> tuple[str, bytes] | None:
     if not resultado["linhas"]:
         return None
     return resultado["linhas"][0][0], resultado["linhas"][0][1]
+
+
+def encontrar_anexos_duplicados() -> list[dict]:
+    # Duplicata = mesma viagem, mesmo nome de arquivo e mesmo conteúdo —
+    # agrupa por esses 3 campos e reporta qualquer grupo com mais de 1
+    # linha, mantendo sempre o id mais antigo (primeiro upload) como o
+    # "original" e listando os demais como candidatos a remoção. Usado pelo
+    # script scripts/limpar_anexos_duplicados.py, não pela aplicação.
+    resultado = _executar("SELECT id, chave_viagem, nome, dados FROM anexos ORDER BY id")
+    grupos: dict[tuple, list[int]] = {}
+    for anexo_id, chave_viagem, nome, dados in resultado["linhas"]:
+        grupos.setdefault((chave_viagem, nome, dados), []).append(anexo_id)
+
+    duplicados = []
+    for (chave_viagem, nome, _dados), ids in grupos.items():
+        if len(ids) > 1:
+            ids_ordenados = sorted(ids)
+            duplicados.append(
+                {
+                    "chave_viagem": chave_viagem,
+                    "nome": nome,
+                    "manter_id": ids_ordenados[0],
+                    "remover_ids": ids_ordenados[1:],
+                }
+            )
+    return duplicados
+
+
+def remover_anexos_por_id(ids: list[int]) -> None:
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    _executar(f"DELETE FROM anexos WHERE id IN ({placeholders})", ids)
 
 
 def salvar_anexos(chave_viagem: str, transportadora: str, arquivos: list[tuple[str, bytes]], usuario: str) -> None:
